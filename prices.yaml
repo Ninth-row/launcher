@@ -1,0 +1,111 @@
+defaults:
+  format_multipliers:
+    375: 0.55
+    620: 0.83
+    750: 1.0
+    1500: 2.3
+    3000: 5.0
+  burgundy_tier_multipliers:
+    bourgogne: 0.6
+    village: 1.0
+    premier_cru: 2.0
+    grand_cru: 4.5
+  deal_threshold: 0.85
+  fair_ceiling: 1.25
+producers:
+- name: Overnoy/Houillon
+  region: jura
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Ganevat
+  region: jura
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Labet
+  region: jura
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Domaine des Miroirs/Kagami
+  region: jura
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Domaine Calice
+  region: jura
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Thomas Popy
+  region: jura
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Roumier
+  region: burgundy
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Alice Fahrenkrug
+  region: jura
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Jules Brochet
+  region: other
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Bruyere Houillon
+  region: jura
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Allante et Boulanger
+  region: jura
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Domaine des Murmures
+  region: other
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Tom Gauditiabois
+  region: other
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Richard Leroy
+  region: loire
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Lattard
+  region: jura
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
+- name: Romain Lawson
+  region: jura
+  reference_750_eur: 40
+  cuvees: []
+  last_verified: null
+  verified: false

@@ -1,0 +1,84 @@
+name: Wine Producer Scraper
+
+on:
+  schedule:
+    # Hourly, on the hour, UTC. 24 runs/day.
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      fresh:
+        description: "Bypass the 6h disk cache for this run (FRESH=1)"
+        type: boolean
+        default: false
+      max_requests_per_run:
+        description: "Override MAX_REQUESTS_PER_RUN for this run"
+        type: string
+        default: "120"
+      dry_run:
+        description: "Print the digest instead of emailing it (sends nothing, changes no state)"
+        type: boolean
+        default: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    # A cold-cache crawl of 22 polite shops took 8m38s against the old
+    # 10-minute ceiling. The scraper stops itself at MAX_RUN_SECONDS and still
+    # reports; this is only the outer backstop, so it sits well clear of it.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run fixture tests
+        run: pytest tests/ -q
+
+      # Best-effort persistence for notify.py's cooldown/dedupe state,
+      # market.py's observed-price pool, and crawler.py's 6h disk cache
+      # across hourly runs -- runners are
+      # ephemeral, so without this every run would look "new" again.
+      # actions/cache can be evicted by GitHub at any time; the worst case
+      # on a miss is a duplicate alert or an extra fetch, not a broken run.
+      - name: Restore scraper state cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            seen.json
+            observations.json
+            .cache
+          key: wine-scraper-state-${{ github.run_id }}
+          restore-keys: |
+            wine-scraper-state-
+
+      - name: Run scraper
+        env:
+          GMAIL_SENDER: ${{ secrets.GMAIL_SENDER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          MAX_REQUESTS_PER_RUN: ${{ inputs.max_requests_per_run || '120' }}
+          FRESH: ${{ (inputs.fresh && '1') || '' }}
+          # A dry run prints the digest and deliberately persists nothing,
+          # so previewing a run cannot put real finds into cooldown.
+          DRY_RUN: ${{ (inputs.dry_run && '1') || '' }}
+          # Only when a human started this run. The hourly schedule stays
+          # quiet unless there is news; a run started from the dashboard
+          # always reports what it can currently see, because silence from a
+          # run you asked for reads as a broken scraper -- it did, twice.
+          FORCE_REPORT: ${{ (github.event_name == 'workflow_dispatch' && '1') || '' }}
+        run: python scraper.py
+
+      - name: Upload hits.json artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hits-${{ github.run_id }}
+          path: |
+            hits.json
+            observations.json
+          retention-days: 30
