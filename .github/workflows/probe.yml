@@ -1,0 +1,130 @@
+name: Probe Shops
+
+# Manual only -- never scheduled. This is the tool that gives shop-adapter
+# real network access: the dev sandbox has none, so shop verification has
+# to happen on a runner.
+#
+# Default run is read-only: it reports and uploads the real responses as an
+# artifact. With `apply` ticked it also commits what it just observed --
+# real fixture, corrected platform, verified:true -- but only for shops
+# that returned and parsed a real response in that same run, and only if
+# the full test suite then passes.
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Comma-separated shop names to probe (blank = all unverified)"
+        type: string
+        default: ""
+      capture:
+        description: "Comma-separated URLs to fetch and commit to probe_pages/ for inspection (diagnostic only)"
+        type: string
+        default: ""
+      max_requests_per_run:
+        description: "Request budget for this probe"
+        type: string
+        default: "150"
+      apply:
+        # On by default. A read-only probe that finds two working shops and
+        # commits nothing is the failure that kept lavinoterie and pangee
+        # dark for three days after they had already answered cleanly.
+        # Nothing is committed unless the suite passes against the new
+        # fixtures, and only for shops that parsed a real response in this
+        # same run, so the safe default is the useful one.
+        description: "Save real fixtures and set verified:true for shops that probe OK (commits to the branch)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    # Politeness costs wall-clock: 3s + jitter between requests to the same
+    # host, up to 3 endpoints per shop, ~25 shops. Budget generously.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Probe shops
+        env:
+          MAX_REQUESTS_PER_RUN: ${{ inputs.max_requests_per_run || '150' }}
+          # Always hit the network on a probe; a cached body tells us
+          # nothing new about whether the endpoint is live right now.
+          FRESH: "1"
+          # Through the environment, never spliced into the command line: a
+          # dispatch with "Lapangee, lavinoterie" in this box became two
+          # shell arguments and crashed the run. Quoted below, a space in a
+          # shop list is just a space.
+          ONLY: ${{ inputs.only }}
+          CAPTURE: ${{ inputs.capture }}
+          APPLY: ${{ inputs.apply }}
+        run: |
+          args=()
+          if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
+          if [ -n "$CAPTURE" ]; then args+=(--capture "$CAPTURE"); fi
+          if [ "$APPLY" = "true" ]; then args+=(--apply); fi
+          python probe.py "${args[@]}"
+
+      - name: Upload probe results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-results-${{ github.run_id }}
+          path: probe_output/
+          retention-days: 30
+
+      # Nothing is committed unless the suite is green against the new
+      # fixtures, so a shop can never go live on a response we can't parse.
+      - name: Run tests against the new fixtures
+        if: inputs.apply || inputs.capture != ''
+        run: pytest tests/ -q
+
+      # Only on the default branch. wine.html is generated, so a copy
+      # committed on a feature branch conflicts with the copy main's own
+      # rebuild workflow writes -- every merge then stops on a file whose
+      # correct resolution is "regenerate it". Main rebuilds itself on the
+      # push that follows a merge, so the branch never needs to carry one.
+      - name: Rebuild dashboard
+        if: (inputs.apply || inputs.capture != '') && github.ref_name == github.event.repository.default_branch
+        run: python dashboard.py
+
+      - name: Commit verified shops
+        if: inputs.apply || inputs.capture != ''
+        run: |
+          rm -rf probe_output
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No shops changed state."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Verify shops from probe run ${{ github.run_id }}
+
+          Real responses fetched and parsed in this run; fixtures saved
+          (trimmed, keeping producer matches), platforms corrected and
+          verified set true. Tests passed before this commit."
+
+          # A probe takes minutes, and anything pushed to the branch
+          # meanwhile makes the push a non-fast-forward. Losing a verified
+          # shop to that is losing the whole point of the run, so rebase
+          # onto whatever arrived and try again.
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); rebasing onto the branch head."
+            git pull --rebase origin "${{ github.ref_name }}" || exit 1
+            sleep $((attempt * 3))
+          done
+          echo "Could not push after 3 attempts."
+          exit 1
