@@ -135,6 +135,11 @@ GENERIC_NAME_WORDS = {
     # ("... , Blanc - Ganevat") to leak in and split a line in two.
     "blanc", "blanche", "rouge", "rose", "jaune", "brut", "sec", "doux",
     "white", "red", "orange", "petillant", "cremant",
+    # Bottle formats sit in the same position and are not part of a name.
+    # "Savagnin Les Rescapes 2021 Magnum - Jean-Francois Ganevat" keyed as
+    # 'magnum jean francois ganevat', a third line for one producer, so the
+    # magnums of a cuvee were never compared with its bottles.
+    "magnum", "magnums", "jeroboam", "clavelin", "double", "litre", "demi",
 }
 NAME_WORD_RE = re.compile(r"[a-z]{2,}")
 # The producer phrase runs back from the alias until something that cannot
@@ -154,7 +159,14 @@ def segment(title, producer_name, aliases=()):
     title and dropping the generic words leaves those two as different
     strings without anyone having to say so.
     """
-    norm = normalize(title)
+    # "&" is written for "et" and means the same thing on a label, but it was
+    # a segment boundary, so "Anne & Jean-Francois Ganevat" lost the "Anne"
+    # and keyed identically to the domaine's "Jean-Francois Ganevat" -- while
+    # "Anne et Jean-Francois Ganevat" keyed separately. Which line a negoce
+    # bottle joined therefore depended on the shop's typography, and half of
+    # mareehaute's negoce bottles landed in the domaine's price pool. A EUR 40
+    # negoce cuvee against a EUR 91 domaine average is a permanent DEAL.
+    norm = normalize(title).replace("&", " et ")
     best = None
     for alias in aliases or [producer_name]:
         idx = norm.find(normalize(alias))
