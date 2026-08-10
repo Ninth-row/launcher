@@ -306,6 +306,40 @@ HTTP header or printed.
   `autoselect` try first; only write per-shop selectors when the probe
   shows it genuinely cannot read that page. Selectors are a maintenance
   cost paid per shop, per restyle.
+- A producer who sells several ranges under one surname needs bands, not a
+  pooled average. Ganevat bottles the domaine's own Cotes du Jura (~EUR 91),
+  a negoce line with his sister Anne from bought Jura fruit, and a negoce
+  line from fruit outside the Jura (~EUR 40 or less). One pooled reference
+  makes the cheap bottle a permanent DEAL and the dear one a permanent HIGH,
+  which is what `lines:` in `prices.yaml` exists to stop: a per-line
+  threshold, absolute, **per 750ml equivalent** so a magnum is not a bargain
+  for being big and a clavelin -- 620ml and almost always vin jaune, dearer
+  by nature -- is not one for being small. It is a deliberate exception to
+  "references are observed": a human who knows the range set these, and the
+  observed pool cannot separate what a label does not distinguish.
+  A line may be configured `alert: false`. Such a hit is classified `NOALERT`
+  and stays out of every email body -- digest, recap and on-demand alike,
+  because a recap of "everything currently matched" would otherwise put it
+  back in the inbox weekly -- while still being written to `hits.json`.
+  Never make `evaluate.py` *drop* it: silencing an alert is notify's decision,
+  and the row is the only way the human sees a cuvee that needs classifying.
+  A bottle that cannot be placed goes to `negoce_unclassified`, which never
+  alerts: an unplaced cuvee is more often negoce-from-outside than not, and
+  guessing the band is how the false deals came back.
+- Which line a bottle belongs to is decided by the curated cuvee list first,
+  the label's attribution second. Shops file negoce cuvees under "Domaine
+  Ganevat" often enough that the label is not the last word, and the
+  attribution mark is matched as a whole word -- "COFFRET ANNIVERSAIRE
+  GANEVAT" is a real listing and "anniversaire" is not "Anne".
+- `market.segment()` normalises "&" to "et" before splitting, and treats
+  format words as generic. Both were live bugs: "Anne & Jean-Francois
+  Ganevat" lost its "Anne" at the segment boundary and keyed *identically to
+  the domaine*, while "Anne et Jean-Francois Ganevat" keyed apart -- so which
+  price pool a negoce bottle joined depended on the shop's typography, and
+  mareehaute writes it both ways in one catalogue. "... 2021 Magnum -
+  Jean-Francois Ganevat" keyed as `magnum jean francois ganevat`, a third
+  line for one producer, so a cuvee's magnums were never compared with its
+  bottles.
 - `market.py` must keep cuvee, vintage and format in the comparison key.
   Collapsing any of them re-creates the bug the module exists to fix: a
   EUR 30 negoce bottle scored against a EUR 70 domaine average reads as a

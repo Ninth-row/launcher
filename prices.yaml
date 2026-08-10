@@ -25,6 +25,63 @@ producers:
   cuvees: []
   last_verified: null
   verified: false
+  # Ganevat sells three different things under one surname, and the observed
+  # market pool cannot separate them on price alone: the domaine's Chalasses
+  # is EUR 91 and the negoce De Toute Beaute is EUR 40, so one pooled average
+  # makes the cheap bottle a permanent DEAL and the dear one a permanent HIGH.
+  #
+  # Every threshold is per 750ml equivalent, so a magnum or a clavelin is
+  # compared like for like -- a clavelin is 620ml and almost always vin jaune,
+  # which is dearer by nature, and comparing its face price to a bottle band
+  # would flag it as a deal for being small.
+  lines:
+    # A bottle we cannot place is not alerted. Unplaced almost always means a
+    # negoce cuvee we have not classified yet, and negoce-from-outside-Jura is
+    # exactly what must never alert -- so silence is the safe default, and the
+    # row still appears in hits.json and the digest table to be classified.
+    default: domaine
+    negoce_marks: [anne]
+    negoce_default: negoce_unclassified
+    classes:
+      domaine: {deal_under_750_eur: 80}
+      negoce_jura: {deal_under_750_eur: 55}
+      negoce_outside: {alert: false}
+      negoce_unclassified: {alert: false}
+    # The curated list wins over the label, because shops file negoce cuvees
+    # under "Domaine Ganevat" often enough to matter.
+    cuvees:
+      negoce_outside:
+        - poulprix
+        - victor la combe
+        - de toute beaute
+        - j'en veux encore
+        - y'a bon la pente
+        - zero pointe
+        - madelon
+        - trouble fete
+        - en voiture simone
+      negoce_jura:
+        - champ poids
+        - rotagamete
+        - sulq
+        - la prairie du haut
+        - au sommet
+        - l'eau d'range
+      domaine:
+        - chalasses
+        - grandes teppes
+        - grands teppes
+        - julien en billat
+        - grusse en billat
+        - vignes de mon pere
+        - les rescapes
+        - enfant terrible
+        - cuvee florine
+        - cuvee marguerite
+        - plein sud
+        - vin jaune
+        - vieux macvin
+        - macvin
 - name: Labet
   region: jura
   reference_750_eur: null

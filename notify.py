@@ -21,7 +21,7 @@ HITS_PATH = Path(os.environ.get("HITS_OUTPUT_PATH", Path(__file__).parent / "hit
 COOLDOWN_DAYS = 30
 PRICE_DROP_THRESHOLD = 0.10
 EMAIL_ROW_CAP = 40
-SECTION_ORDER = ["DEAL", "FAIR", "NOREF", "HIGH"]
+SECTION_ORDER = ["DEAL", "FAIR", "NOREF", "HIGH", "NOALERT"]
 
 # How long the tracker may stay silent before it says so unprompted. A run
 # with no news is right to send nothing, but from the inbox that is
@@ -84,6 +84,13 @@ def should_alert(hit, prev, now):
     the observed market pool, which moves every hour as other shops are
     crawled, so DEAL -> FAIR -> DEAL flapping is realistic in a way a price
     round trip is not."""
+    # A line configured never to alert. The hit is still in hits.json and in
+    # the digest table -- Ganevat's negoce-from-outside-the-Jura is a real
+    # listing worth seeing, it is just never news at any price, because its
+    # price says nothing about the domaine bottles we are actually hunting.
+    if hit.get("alertable") is False:
+        return False
+
     if prev is None:
         return True
 
@@ -293,14 +300,21 @@ def run_digest(all_hits, dry_run=False, state_path=None, hits_path=None,
     alerting, updated_state = select_alerts(all_hits, state, now)
     write_hits_json(all_hits, hits_path)
 
+    # A line configured never to alert stays out of every email body, not just
+    # the alert list. A recap of "everything currently matched" would otherwise
+    # reintroduce it every week, and Ganevat's negoce-from-outside-the-Jura is
+    # exactly the row whose price says nothing about the bottles being hunted.
+    # It is still in hits.json, which is the run's full record.
+    reportable = [h for h in all_hits if h.get("alertable") is not False]
+
     if alerting:
         body = build_digest_body(alerting, notes, tables=tables)
         subject = DIGEST_SUBJECT
     elif force:
-        body = build_digest_body(all_hits, notes, on_demand=True, tables=tables)
+        body = build_digest_body(reportable, notes, on_demand=True, tables=tables)
         subject = ONDEMAND_SUBJECT
-    elif all_hits and recap_due(state, now):
-        body = build_digest_body(all_hits, notes, recap=True, tables=tables)
+    elif reportable and recap_due(state, now):
+        body = build_digest_body(reportable, notes, recap=True, tables=tables)
         subject = RECAP_SUBJECT
     else:
         # Nothing was alerted, so nothing is being silenced; persisting here

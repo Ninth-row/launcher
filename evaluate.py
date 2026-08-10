@@ -126,6 +126,58 @@ def derive_cuvee(title, producer_name):
 
 # --- evaluation --------------------------------------------------------------
 
+
+# --- which line of a producer's range a bottle belongs to ---------------------
+#
+# Ganevat sells three different things under one surname: the domaine's own
+# Cotes du Jura, a negoce line bottled with his sister Anne from bought Jura
+# fruit, and a negoce line from fruit outside the Jura entirely. Their prices
+# do not overlap (EUR 91 domaine, EUR 40 negoce), so one pooled reference
+# makes the cheap bottle a permanent DEAL and the dear one a permanent HIGH --
+# which is what this exists to stop.
+#
+# The bands are absolute, per 750ml equivalent, and configured by hand in
+# prices.yaml. That is a deliberate exception to "references are observed":
+# a human who knows the range set these, and the observed pool cannot
+# separate what a label does not distinguish.
+LINE_UNPLACED_BASIS = "line not classified"
+
+
+def classify_line(title, producer_entry):
+    """(line name, how we know) for this bottle, or (None, None).
+
+    Order of trust: the curated cuvee list, then the label's attribution, then
+    the configured default. The list comes first because shops file negoce
+    cuvees under "Domaine Ganevat" often enough to matter -- the label is not
+    always the truth about what is in the bottle.
+    """
+    lines = (producer_entry or {}).get("lines") or {}
+    if not lines:
+        return None, None
+    norm = normalize(title)
+
+    for line_name, cuvees in (lines.get("cuvees") or {}).items():
+        for cuvee in cuvees or []:
+            if normalize(cuvee) in norm:
+                return line_name, f"cuvee {cuvee!r}"
+
+    for mark in lines.get("negoce_marks") or []:
+        # Whole word: "anne" must not match "anniversaire", and a coffret
+        # called ANNIVERSAIRE GANEVAT is a real listing.
+        if re.search(rf"\b{re.escape(normalize(mark))}\b", norm):
+            return (lines.get("negoce_default") or "negoce_unclassified",
+                    f"label says {mark!r}")
+
+    return lines.get("default"), "default for this producer"
+
+
+def band_for(line_name, producer_entry):
+    """The configured band for a line: (deal_under_750, alertable)."""
+    classes = ((producer_entry or {}).get("lines") or {}).get("classes") or {}
+    entry = classes.get(line_name) or {}
+    return entry.get("deal_under_750_eur"), entry.get("alert", True)
+
+
 def evaluate_hit(hit, pricebook, market_store=None, aliases=None):
     """Return a new dict: hit plus size_ml, size_confidence, tier,
     tier_confidence, reference_price, expected_price, ratio, classification,
@@ -175,6 +227,47 @@ def evaluate_hit(hit, pricebook, market_store=None, aliases=None):
         producer_entry = {}
 
     reference_verified = bool(producer_entry.get("verified", False))
+
+    # A configured line replaces the observed reference for this producer, and
+    # can silence a line entirely. The hit is still returned and still reaches
+    # hits.json and the digest table -- only the alert is withheld, which is
+    # notify's decision to make, not this module's.
+    line_name, line_basis = classify_line(hit.get("title", ""), producer_entry)
+    if line_name:
+        result["line"] = line_name
+        result["line_basis"] = line_basis
+        band, alertable = band_for(line_name, producer_entry)
+        price = hit.get("price")
+        # Per 750ml, so a magnum is not a bargain for being big and a clavelin
+        # is not one for being small. A coffret has no per-bottle price at all,
+        # so it is never banded.
+        price750 = None if bundle or price is None else market.to_750(
+            price, size_ml or 750, format_multipliers)
+        # Recorded whatever happens next, so a digest row can show what the
+        # band was actually compared against. None for a coffret: an unknown
+        # number of bottles has no per-bottle price.
+        result["price_750_eur"] = price750
+        if not alertable:
+            result.update(
+                tier=None, tier_confidence="n/a", reference_price=None,
+                expected_price=None, ratio=None, classification="NOALERT",
+                reference_basis=f"{line_name} ({line_basis}) is never alerted",
+                reference_shops=[], reference_verified=True, caveat=True,
+                alertable=False, price_750_eur=price750,
+            )
+            return result
+        if band is not None and price750 is not None:
+            result.update(
+                tier=None, tier_confidence="n/a", reference_price=band,
+                expected_price=band, ratio=round(price750 / band, 3),
+                classification="DEAL" if price750 < band else "FAIR",
+                reference_basis=(f"{line_name} band: deal under EUR {band:g} "
+                                 f"per 750ml ({line_basis})"),
+                reference_shops=[], reference_verified=True,
+                caveat=size_confidence == "low", alertable=True,
+                price_750_eur=price750,
+            )
+            return result
 
     tier = None
     tier_confidence = "n/a"
