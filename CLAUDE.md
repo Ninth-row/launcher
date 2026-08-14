@@ -208,27 +208,51 @@ true of its *home page*, while `/shop` carries ten priced cards and says
 `1–10 de 315 resultats`. Read a shop's catalogue before concluding anything
 about a shop.
 
-The four that remain unverified each have a tested reason:
+**purewijnen** is the shop that taught this list its last lesson. It is
+Drupal 7 (`li.leaf`, `/sites/purewijnen/files/`) with no commerce module, and
+there is no price anywhere in its HTML: `/nl/wijnen-bestellen`, `/nl/wijnkaart`
+and the grower bio at `probe_pages/capture.nl-renaud-bruyere-houillon.html`
+hold **zero currency markers** between them. It was written off for that, and
+the whole range was a 41-page PDF linked from `/nl/wijnkaart` all along — one
+extra request for 800+ wines. `_fetch_via_pdf_list` reads it, and it is
+verified. "No price in the HTML" is not "no price": look for the document
+before concluding a shop has nothing to read. (Its producer index is real too,
+and `find_producer_links` finds our Renaud Bruyère-Houillon in it while
+ignoring the Overnoy-Crinquand two lines up --
+`tests/fixtures/purewijnen-growers-excerpt.html` keeps that real markup as a
+namesake test -- but the link leads to prose.)
+
+Six remain unverified. Three have a tested reason:
   - **naturavin** blocks us with 403;
   - **vinscheznous** no longer resolves;
-  - **purewijnen** is Drupal 7 (`li.leaf`, `/sites/purewijnen/files/`) with
-    no commerce module, and there is no price anywhere on it to read.
-    Captured and checked: `/nl/wijnen-bestellen` and `/nl/wijnkaart` (the two
-    pages whose names promise a price list) hold **zero currency markers**,
-    as does the grower bio at
-    `probe_pages/capture.nl-renaud-bruyere-houillon.html` — 28KB, not one
-    marker. Its producer index is real, and
-    `find_producer_links` does find our Renaud Bruyère-Houillon in it
-    (ignoring the Overnoy-Crinquand two lines up --
-    `tests/fixtures/purewijnen-growers-excerpt.html` keeps that real markup
-    as a namesake test), but the link leads to prose;
   - **vinnaturelbe** is PrestaShop 1.6 whose product miniatures carry a name,
     a stock line and a "Détails" button and no price at all. Its real
     catalogue is `/fr/categorie/11-acheter-en-ligne`, and
     `probe_pages/capture.vin-naturel-be.fr-categorie-11-acheter-en-ligne.html`
     has 40 product links and **zero currency markers** — catalogue mode, or a
     price wall for guests, not client-side rendering. Its `/fr/vignerons`
-    index lists 41 growers and none of them is a producer we watch.
+    index lists 41 growers and none of them is a producer we watch. It has no
+    PDF either, which is the question purewijnen made worth asking.
+
+Three are recently added and waiting on a probe:
+  - **demainlesvins** answers, and answers with a price wall: 1.34MB of
+    markup, **2 prices, 0 product links** and 32 occurrences of "connexion".
+    Private sales, so the catalogue is behind an account — nothing to read as
+    a guest, and this is not a challenge to work around;
+  - **mifuguemiraisin** keeps no webshop on its own domain; the shop is
+    Hiboutik (a French point-of-sale SaaS) at
+    `mifuguemiraisin.hiboutik.com/shop`, which is what the entry points at.
+    Both its URLs failed instantly on the last probe and the reason was never
+    read back out of the logs — which is why `probe.py` now prints each
+    unverified shop's reason and URL in its summary;
+  - **wineshopbiarritz** (Biarritz, ~1000 references, ships
+    internationally) is reported to keep its range in a frequently-updated
+    document. That is the purewijnen shape, so no new code should be needed —
+    but the document route only runs when the HTML catalogue parsed *nothing*,
+    so a shop with a featured strip on its landing page and its real list in a
+    PDF would read as six bottles. If the probe shows that, the fallback needs
+    to become a choice rather than a last resort. Nothing is assumed until
+    then.
 
 `crawler.Challenged` exists because a shop can answer HTTP 200 with a bot
 challenge rather than its catalogue: **vinnaturel.fr** serves "One moment,

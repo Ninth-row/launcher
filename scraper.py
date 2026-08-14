@@ -428,6 +428,21 @@ SHOPS = [
         "price_selector": "span.price",
         "verified": False,
     },
+    # Biarritz, ~1000 references, ships internationally. Reported to keep its
+    # range in a frequently-updated document rather than a webshop -- the same
+    # shape as purewijnen, which `_fetch_via_pdf_list` already reads. No path
+    # is recorded here: the page that links the list is what the probe finds
+    # and records, and the file's own URL changes with every new edition, so
+    # `find_pdf_link` rediscovers it on each run.
+    {
+        "name": "wineshopbiarritz",
+        "platform": "html",
+        "url": "https://www.wineshop-biarritz.fr",
+        "item_selector": "div.product",
+        "title_selector": "h2.product-title",
+        "price_selector": "span.price",
+        "verified": False,
+    },
 ]
 
 
