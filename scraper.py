@@ -444,6 +444,22 @@ SHOPS = [
         "price_selector": "span.price",
         "verified": True,
     },
+    # 25 years of natural and craft wine, 200+ growers, sold from its own
+    # platform rather than a shop package: wines live at /en/wine/<id>, the
+    # catalogue at /en/wines, and there is a /en/wineries grower index --
+    # which is the way in if the catalogue turns out not to be readable. No
+    # path is recorded here; the probe reads the menu and records what
+    # actually parsed, because a guessed path confirms itself on every
+    # re-probe.
+    {
+        "name": "cuvee3000",
+        "platform": "html",
+        "url": "https://cuvee3000.com",
+        "item_selector": "div.product",
+        "title_selector": "h2.product-title",
+        "price_selector": "span.price",
+        "verified": False,
+    },
 ]
 
 
