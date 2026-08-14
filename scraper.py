@@ -1063,7 +1063,9 @@ def _fetch_via_pdf_list(shop, page_html, page_url, crawler_client):
         raise UnreadableDocumentError(f"{pdf_url}: {why}")
 
     text = "\n".join(pages)
-    items = pdflist.parse_wine_list(text, pdf_url)
+    # The pages as well as the joined text: a running header is recognised by
+    # sitting at the edge of every page, which the join throws away.
+    items = pdflist.parse_wine_list(text, pdf_url, pages=pages)
     # A scanned list extracts to empty pages, which would read as "this shop
     # stocks nothing" -- indistinguishable from a shop that really is empty.
     if pages and not items:

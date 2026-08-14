@@ -40,7 +40,13 @@ producers:
     # exactly what must never alert -- so silence is the safe default, and the
     # row still appears in hits.json and the digest table to be classified.
     default: domaine
-    negoce_marks: [anne]
+    # "anne" is the attribution -- the negoce line is bottled with his sister.
+    # "negoce" is the shop saying so outright: wineshopbiarritz files its
+    # whole range as "GANEVAT DOMAINE <cuvee>" and "GANEVAT NEGOCE <cuvee>",
+    # and without this every negoce bottle it lists fell through to the
+    # domaine default and its EUR 80 band -- 20 of them, most flagged DEAL,
+    # which is precisely the false deal these bands exist to stop.
+    negoce_marks: [anne, negoce]
     negoce_default: negoce_unclassified
     classes:
       domaine: {deal_under_750_eur: 80}
@@ -79,9 +85,12 @@ producers:
         - cuvee florine
         - cuvee marguerite
         - plein sud
-        - vin jaune
-        - vieux macvin
-        - macvin
+        # Not listed here: vin jaune, macvin, vin de paille, cremant. Those
+        # name a style, not a cuvee, and both lines make them -- so as
+        # curated "cuvees" they outranked the label and filed three bottles
+        # of "GANEVAT NEGOCE VIN JAUNE" as domaine. A style word says
+        # nothing about which range a bottle came from; leave it to the
+        # label, which for once says outright.
 - name: Labet
   region: jura
   reference_750_eur: null
