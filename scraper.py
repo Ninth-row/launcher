@@ -158,6 +158,7 @@ PRODUCERS = {
     "Lattard": ["lattard"],
     "Romain Lawson": ["romain lawson"],
     "Antoine Robles": ["robles"],
+    "William Kelley": ["william kelley"],
 }
 
 # ---------------------------------------------------------------------------

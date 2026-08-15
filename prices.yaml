@@ -160,3 +160,9 @@ producers:
   cuvees: []
   last_verified: '2026-08-12'
   verified: true
+- name: William Kelley
+  region: burgundy
+  reference_750_eur: 150
+  cuvees: []
+  last_verified: null
+  verified: false
