@@ -1,0 +1,49 @@
+# Real extracted text from https://www.wineshop-biarritz.fr/ -- the shop's
+# own catalogue, an 84-page PDF of 1546 rows, captured by probe.py --capture
+# (the whole thing is probe_pages/capture.www-wineshop-biarritz-fr.*.txt).
+#
+# Kept as a test fixture because this document is a different animal from
+# purewijnen's ragged wine list: it is an inventory export, one row per
+# reference, with the columns flattened into the row --
+#
+#     Nb | Nom | Famille | Sous Famille | Stock | Prix TTC Vente
+#
+# Everything the parser has to get right about it is in these lines: the
+# stock column whose 0 means gone, the column header reprinted on every page,
+# the "Page n sur 84" footer, and rows whose own label says which Ganevat
+# line the bottle belongs to.
+#
+# Pages are separated by their real footer, so a test can rebuild the page
+# structure the running-header rule needs.
+
+Nb Nom Famille Sous Stock Prix
+complet Famille TTC Vente
+1 GANEVAT DOMAINE GRANDS TEPPES 2020 JURA BLANC 0 88,00
+1 GANEVAT DOMAINE GRUSSE EN BILLAT 2020 JURA BLANC 0 85,00
+1 GANEVAT DOMAINE GRUSSE EN BILLAT MAG 2020 JURA BLANC 0 180,00
+Nb Nom Famille Sous Stock Prix
+complet Famille TTC Vente
+Page 48 sur 84
+
+1 GANEVAT DOMAINE SAVAGNIN EN BILLAT 2018 JURA BLANC 0 88,00
+1 GANEVAT DOMAINE VIEUX MACVIN JURA BLANC 3 60,00
+1 GANEVAT DOMAINE VIGNES DE MON PERE 2010 JURA BLANC 0 250,00
+1 GANEVAT DOMAINE VIN JAUNE 2014 JURA BLANC 1 160,00
+1 GANEVAT NEGOCE BLANC LE COURAGE 2021 JURA BLANC 4 39,00
+1 GANEVAT NEGOCE ROUGE DE TOUTE BEAUTE JURA ROUGE 3 29,00
+1 GANEVAT NEGOCE ROUGE MON ROUGE JURA ROUGE 3 32,00
+1 GANEVAT NEGOCE VIN JAUNE 2012 JURA BLANC 5 120,00
+Nb Nom Famille Sous Stock Prix
+complet Famille TTC Vente
+Page 49 sur 84
+
+1 PIERRE OVERNOY ARBOIS CHARDONNAY 2016 JURA BLANC 0 50,00
+1 REMI LEROY BRUT NATURE CHAMPAGNE CHAMPAGNE 23 44,00
+1 RICHARD LEROY LES NOELS DE MONTBENAULT 2022 LOIRE BLANC 0 85,00
+1 RICHARD LEROY LES ROULIERS 2020 LOIRE BLANC 0 85,00
+1 TOM GAUDITIABOIS EXPLORATION 3 CHAMPAGNE CHAMPAGNE 0 60,00
+1 LABALLE BAS ARMAGNAC 1970 ALCOOL ARMAGNAC 2 430,00
+1 SAC COTON PHARE BIARRITZ ACCESSOIRES ACCESSOIRES 27 6,00
+Nb Nom Famille Sous Stock Prix
+complet Famille TTC Vente
+Page 50 sur 84

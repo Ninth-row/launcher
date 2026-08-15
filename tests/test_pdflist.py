@@ -251,3 +251,123 @@ def test_a_pdf_survives_the_cache_as_bytes(monkeypatch, tmp_path):
 
     cached = client.get("https://x.test/list.pdf")
     assert cached.from_cache and cached.content == blob
+
+
+# --- an inventory export, which is a different document again -----------------
+#
+# wineshopbiarritz's catalogue is not a wine list but a stock export: one row
+# per reference, columns flattened into the row, `Nb Nom Famille Sous Famille
+# Stock Prix TTC Vente`. Read the way purewijnen's list is read it parses
+# cleanly and says something false -- 1546 wines, none of them sold out, when
+# the shop's own Stock column says 0 against 707 of them, including every
+# Richard Leroy, the Pierre Overnoy and all three Gauditiabois.
+
+BIARRITZ_TEXT = (FIXTURES / "wineshopbiarritz-list-excerpt.txt").read_text()
+BIARRITZ_URL = "https://www.wineshop-biarritz.fr/_files/ugd/ddc53e_list.pdf"
+
+
+def biarritz_pages():
+    """The excerpt split back into pages on its own footer, which is what the
+    running-header rule reads. In a live run these come from pypdf."""
+    import re
+    return re.split(r"(?m)^Page \d+ sur \d+\s*$", BIARRITZ_TEXT)
+
+
+def biarritz_items():
+    return pdflist.parse_wine_list(BIARRITZ_TEXT, BIARRITZ_URL,
+                                   pages=biarritz_pages())
+
+
+def biarritz_named(fragment):
+    return next(i for i in biarritz_items() if fragment in i["title"])
+
+
+def test_a_zero_in_the_stock_column_is_sold_out():
+    """The single most consequential number in this document. A sold-out row
+    that reads as in stock is alerted as a find *and* written to seen.json,
+    which is what makes a later restock silent -- and a restocked Overnoy is
+    the most valuable alert this scraper sends."""
+    assert biarritz_named("VIGNES DE MON PERE")["in_stock"] is False
+    assert biarritz_named("RICHARD LEROY LES ROULIERS")["in_stock"] is False
+    assert biarritz_named("PIERRE OVERNOY")["in_stock"] is False
+
+
+def test_stock_on_hand_is_still_in_stock():
+    assert biarritz_named("VIEUX MACVIN")["in_stock"] is True
+    assert biarritz_named("LE COURAGE")["in_stock"] is True
+
+
+def test_the_price_is_read_past_the_stock_column():
+    assert biarritz_named("VIEUX MACVIN")["price"] == pytest.approx(60.00)
+    assert biarritz_named("LABALLE BAS ARMAGNAC")["price"] == pytest.approx(430.00)
+
+
+def test_a_vintage_before_the_price_is_not_a_stock_count():
+    """purewijnen writes "Cotes du Jura Trousseau 2023  36.00" -- four digits,
+    a year, and not a zero. Only a zero is read as stock for exactly this
+    reason."""
+    assert pdflist.ZERO_STOCK_BEFORE_PRICE.search("Trousseau 2023 36.00") is None
+    assert pdflist.ZERO_STOCK_BEFORE_PRICE.search("JURA BLANC 0 98,00") is not None
+    # ...and a stock of 10 is not a stock of 0.
+    assert pdflist.ZERO_STOCK_BEFORE_PRICE.search("JURA BLANC 10 98,00") is None
+
+
+# --- the document talking about itself ----------------------------------------
+
+def test_a_reprinted_column_header_is_not_a_wine():
+    """"Nb Nom Famille Sous Stock Prix" is reprinted on all 84 pages. Buffered
+    like a producer's name, it took the title of the next priced row -- three
+    Ganevat bottles reached the digest named after the header."""
+    assert not any("Nb Nom Famille" in i["title"] for i in biarritz_items())
+    assert not any("Prix complet" in i["title"] for i in biarritz_items())
+
+
+def test_the_header_does_not_swallow_the_row_beneath_it():
+    """Dropping furniture must not drop the wine that follows it: the row
+    after a page break is a bottle like any other."""
+    assert biarritz_named("SAVAGNIN EN BILLAT")["price"] == pytest.approx(88.00)
+
+
+def test_a_page_footer_is_furniture_however_it_is_numbered():
+    assert pdflist.PAGE_MARKER.match("Page 48 sur 84")
+    assert pdflist.PAGE_MARKER.match("Page 2 of 41")
+    assert not pdflist.PAGE_MARKER.match("Pierre Overnoy Arbois 2016")
+
+
+def test_a_growers_own_name_is_not_furniture():
+    """The rule that catches a running header must not catch a producer. A
+    grower's name repeats once per wine in a ragged list, and judging
+    furniture by recurrence alone dropped `Renaud Bruyere-Houillon` out of
+    purewijnen's list entirely -- a watched producer, silently gone. Position
+    on the page is what separates them."""
+    found = set()
+    for item in items():
+        found.update(scraper.match_producers(item["text"]))
+    assert "Bruyere Houillon" in found
+
+
+def test_flat_text_gets_no_furniture_rule_rather_than_a_guess():
+    """Without the pages there is no page edge, so nothing is furniture."""
+    assert pdflist._running_furniture(None) == set()
+    assert pdflist._running_furniture([]) == set()
+
+
+# --- the title is the wine's name, and nothing that changes ------------------
+
+def test_the_title_carries_neither_the_price_nor_the_stock():
+    title = biarritz_named("VIEUX MACVIN")["title"]
+    assert "60,00" not in title
+    assert title.rstrip().endswith("JURA BLANC"), title
+
+
+def test_a_price_change_does_not_read_as_a_new_wine():
+    """The item's URL fragment is built from its title, and notify keys
+    remembered items on that URL. With the price left in the title, every
+    price change minted a new key -- so a drop could only ever be reported as
+    a new find, and the price-drop alert could never fire for this shop."""
+    def key(stock, price):
+        row = f"1 GANEVAT DOMAINE VIEUX MACVIN JURA BLANC {stock} {price}"
+        parsed = pdflist.parse_wine_list(row, BIARRITZ_URL)
+        return parsed[0]["url"]
+
+    assert key(3, "60,00") == key(2, "54,00")

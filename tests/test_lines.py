@@ -194,3 +194,39 @@ def test_a_producer_without_configured_lines_still_uses_the_observed_market():
     assert result.get("line") is None
     assert result["classification"] == "NOREF"      # no observed pool in this test
     assert result.get("alertable") is not False
+
+
+# --- when the shop says outright which line it is -----------------------------
+
+def test_a_label_that_says_negoce_is_not_the_domaine():
+    """wineshopbiarritz files its whole range as "GANEVAT DOMAINE <cuvee>" and
+    "GANEVAT NEGOCE <cuvee>". Without "negoce" as an attribution mark, all 20
+    of its negoce bottles fell through to the domaine default and its EUR 80
+    band, and most were flagged DEAL -- the exact false deal these bands were
+    added to stop, arriving through a shop that had actually said so."""
+    result = scored("1 GANEVAT NEGOCE ROUGE MON ROUGE JURA ROUGE", 32)
+    assert result["line"] != "domaine"
+    assert notify.should_alert(result, None, None) is False
+
+
+def test_a_label_that_says_domaine_still_is_the_domaine():
+    assert scored("1 GANEVAT DOMAINE POULSARD ENFANT TERRIBLE 2023 JURA ROUGE", 65)["line"] == "domaine"
+
+
+def test_a_style_is_not_a_cuvee_and_does_not_outrank_the_label():
+    """Both ranges make vin jaune, macvin, vin de paille and cremant, so those
+    words say nothing about which one a bottle came from. Listed as curated
+    "cuvees" they outranked the label -- and the curated list is checked first
+    -- so three bottles of "GANEVAT NEGOCE VIN JAUNE" were scored against the
+    domaine's band."""
+    assert scored("1 GANEVAT NEGOCE VIN JAUNE 2012 JURA BLANC", 120)["line"] != "domaine"
+    assert scored("1 GANEVAT DOMAINE VIN JAUNE 2014 JURA BLANC", 160)["line"] == "domaine"
+
+
+def test_a_curated_cuvee_still_beats_a_negoce_label():
+    """The ordering itself is unchanged: a named cuvee is stronger evidence
+    than any label, which is what places De Toute Beaute as from outside the
+    Jura however the shop files it."""
+    result = scored("1 GANEVAT NEGOCE ROUGE DE TOUTE BEAUTE JURA ROUGE", 29)
+    assert result["line"] == "negoce_outside"
+    assert "cuvee" in result["line_basis"]

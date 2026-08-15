@@ -429,6 +429,37 @@ SHOPS = [
         "price_selector": "span.price",
         "verified": False,
     },
+    # Biarritz, ~1000 references, ships internationally. Reported to keep its
+    # range in a frequently-updated document rather than a webshop -- the same
+    # shape as purewijnen, which `_fetch_via_pdf_list` already reads. No path
+    # is recorded here: the page that links the list is what the probe finds
+    # and records, and the file's own URL changes with every new edition, so
+    # `find_pdf_link` rediscovers it on each run.
+    {
+        "name": "wineshopbiarritz",
+        "platform": "html",
+        "url": "https://www.wineshop-biarritz.fr",
+        "item_selector": "div.product",
+        "title_selector": "h2.product-title",
+        "price_selector": "span.price",
+        "verified": True,
+    },
+    # 25 years of natural and craft wine, 200+ growers, sold from its own
+    # platform rather than a shop package: wines live at /en/wine/<id>, the
+    # catalogue at /en/wines, and there is a /en/wineries grower index --
+    # which is the way in if the catalogue turns out not to be readable. No
+    # path is recorded here; the probe reads the menu and records what
+    # actually parsed, because a guessed path confirms itself on every
+    # re-probe.
+    {
+        "name": "cuvee3000",
+        "platform": "html",
+        "url": "https://cuvee3000.com",
+        "item_selector": "div.product",
+        "title_selector": "h2.product-title",
+        "price_selector": "span.price",
+        "verified": False,
+    },
 ]
 
 
@@ -1049,7 +1080,9 @@ def _fetch_via_pdf_list(shop, page_html, page_url, crawler_client):
         raise UnreadableDocumentError(f"{pdf_url}: {why}")
 
     text = "\n".join(pages)
-    items = pdflist.parse_wine_list(text, pdf_url)
+    # The pages as well as the joined text: a running header is recognised by
+    # sitting at the edge of every page, which the join throws away.
+    items = pdflist.parse_wine_list(text, pdf_url, pages=pages)
     # A scanned list extracts to empty pages, which would read as "this shop
     # stocks nothing" -- indistinguishable from a shop that really is empty.
     if pages and not items:

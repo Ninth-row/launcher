@@ -208,27 +208,54 @@ true of its *home page*, while `/shop` carries ten priced cards and says
 `1–10 de 315 resultats`. Read a shop's catalogue before concluding anything
 about a shop.
 
-The four that remain unverified each have a tested reason:
+**purewijnen** is the shop that taught this list its last lesson. It is
+Drupal 7 (`li.leaf`, `/sites/purewijnen/files/`) with no commerce module, and
+there is no price anywhere in its HTML: `/nl/wijnen-bestellen`, `/nl/wijnkaart`
+and the grower bio at `probe_pages/capture.nl-renaud-bruyere-houillon.html`
+hold **zero currency markers** between them. It was written off for that, and
+the whole range was a 41-page PDF linked from `/nl/wijnkaart` all along — one
+extra request for 800+ wines. `_fetch_via_pdf_list` reads it, and it is
+verified. "No price in the HTML" is not "no price": look for the document
+before concluding a shop has nothing to read. (Its producer index is real too,
+and `find_producer_links` finds our Renaud Bruyère-Houillon in it while
+ignoring the Overnoy-Crinquand two lines up --
+`tests/fixtures/purewijnen-growers-excerpt.html` keeps that real markup as a
+namesake test -- but the link leads to prose.)
+
+Five remain unverified, and every one has a tested reason:
   - **naturavin** blocks us with 403;
   - **vinscheznous** no longer resolves;
-  - **purewijnen** is Drupal 7 (`li.leaf`, `/sites/purewijnen/files/`) with
-    no commerce module, and there is no price anywhere on it to read.
-    Captured and checked: `/nl/wijnen-bestellen` and `/nl/wijnkaart` (the two
-    pages whose names promise a price list) hold **zero currency markers**,
-    as does the grower bio at
-    `probe_pages/capture.nl-renaud-bruyere-houillon.html` — 28KB, not one
-    marker. Its producer index is real, and
-    `find_producer_links` does find our Renaud Bruyère-Houillon in it
-    (ignoring the Overnoy-Crinquand two lines up --
-    `tests/fixtures/purewijnen-growers-excerpt.html` keeps that real markup
-    as a namesake test), but the link leads to prose;
   - **vinnaturelbe** is PrestaShop 1.6 whose product miniatures carry a name,
     a stock line and a "Détails" button and no price at all. Its real
     catalogue is `/fr/categorie/11-acheter-en-ligne`, and
     `probe_pages/capture.vin-naturel-be.fr-categorie-11-acheter-en-ligne.html`
     has 40 product links and **zero currency markers** — catalogue mode, or a
     price wall for guests, not client-side rendering. Its `/fr/vignerons`
-    index lists 41 growers and none of them is a producer we watch.
+    index lists 41 growers and none of them is a producer we watch. It has no
+    PDF either, which is the question purewijnen made worth asking;
+  - **demainlesvins** answers, and answers with a price wall: 1.34MB of
+    markup, **2 prices, 0 product links** and 32 occurrences of "connexion".
+    Private sales, so the catalogue is behind an account — nothing to read as
+    a guest, and this is not a challenge to work around;
+  - **mifuguemiraisin** is closed, and not for a technical reason: its shop is
+    Hiboutik (a French point-of-sale SaaS) at `mifuguemiraisin.hiboutik.com`,
+    and **every one of the ten candidate URLs came back `robots.txt
+    disallows`**. That is the platform saying no, and it is answered the same
+    way a bot challenge is — by not going there. Its own domain is a shopfront
+    with nothing to read, which is why the entry points at Hiboutik at all.
+
+**wineshopbiarritz** is the second document shop, and the one that showed the
+adapter was reading a document without reading its *columns*. Its site is Wix
+with zero prices in 548KB of markup; its catalogue is an 84-page PDF of 1546
+rows, and it holds five watched producers — Ganevat, Jules Brochet,
+Overnoy/Houillon, Richard Leroy, Tom Gauditiabois — for 12 requests. But it
+is an inventory export, not a wine list (`Nb | Nom | Famille | Sous Famille |
+Stock | Prix TTC Vente`), and read as purewijnen's list is read it parsed
+cleanly and said something false: 1546 wines, none sold out, when the shop's
+own Stock column reads 0 against **707** of them, every Richard Leroy and the
+Pierre Overnoy among them. `pdflist` now reads that column, the running header
+and the "Page n sur 84" footer; `tests/fixtures/wineshopbiarritz-list-excerpt.txt`
+keeps the real rows. Read a shop's columns, not just its rows.
 
 `crawler.Challenged` exists because a shop can answer HTTP 200 with a bot
 challenge rather than its catalogue: **vinnaturel.fr** serves "One moment,
@@ -355,6 +382,40 @@ HTTP header or printed.
   scraper sends, and it works because nothing about a sold-out listing is
   persisted. `tests/test_coverage.py` asserts both halves; don't "improve"
   it by recording sold-out state.
+- A document states stock in a column, and the column must be read. Two
+  shops now publish their range as a PDF and they are not the same document:
+  purewijnen writes a ragged wine list where `SOLD` replaces the price,
+  wineshopbiarritz exports its inventory with a `Stock` number in front of
+  it. Read as the first, the second reported 1546 wines and **not one** sold
+  out while its own column said 0 against 707 of them — every Richard Leroy,
+  the Pierre Overnoy, all three Gauditiabois — which would have alerted them
+  as finds and written them to `seen.json`, silencing the restock that is the
+  point of watching them. Only a **zero** is read as stock: the column is
+  unlabelled once the PDF is flattened, so any other number could be a
+  vintage or a case size, and guessing is how a wine goes missing. See
+  `pdflist.ZERO_STOCK_BEFORE_PRICE`.
+- A running header is furniture, and it is recognised by **where it sits**,
+  not by how often it repeats. `FURNITURE` cannot know the wording of every
+  list — it knew "Naam Streek" and not "Nb Nom Famille Sous Stock Prix", so
+  biarritz's header buffered like a producer name and titled three Ganevat
+  rows. Judging it by recurrence alone is worse: a grower's name recurs once
+  per wine, and that rule dropped `Renaud Bruyère-Houillon` out of
+  purewijnen's list entirely. `_running_furniture` takes the *pages* and
+  looks only at each page's first and last few lines; given flat text it
+  finds nothing rather than guessing.
+- A document entry's title carries no price and no stock count. `notify`
+  keys a remembered item on its URL, and a document item's URL fragment is
+  built from its title — so leaving the numbers in minted a new key on every
+  price change, and a price *drop* could only ever be reported as a new find.
+- Which Ganevat line a bottle belongs to is decided by the curated cuvee
+  list, then the label — and the label includes the word `negoce`, not just
+  the `anne` attribution. A shop that files its range as "GANEVAT DOMAINE x"
+  and "GANEVAT NEGOCE y" is telling us outright, and ignoring it put 20 of
+  biarritz's negoce bottles against the domaine's EUR 80 band, most of them
+  flagged DEAL. Style words are not cuvees: `vin jaune`, `macvin`, `vin de
+  paille` and `cremant` are made by both ranges, so they must stay out of the
+  curated lists — as "cuvees" they outrank the label, which is how three
+  bottles of "GANEVAT NEGOCE VIN JAUNE" were scored as domaine.
 - "Watched but found nowhere" means matched nowhere at all, in stock or
   not. A producer stocked somewhere but sold out belongs in "Matched but
   sold out everywhere" with its shops named; collapsing the two back

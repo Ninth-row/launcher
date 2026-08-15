@@ -63,6 +63,19 @@ def extract_text(blob):
 # the list's own footnote marker. `(?<![\d.,/])` is the phone-number guard.
 PRICE_AT_END = re.compile(r"(?<![\d.,/])(\d{1,4})[.,](\d{2})\s*\*?\s*$")
 
+# A stock column sitting between the name and the price. wineshopbiarritz's
+# list is an inventory export -- `Nb Nom Famille Sous Famille Stock Prix TTC`
+# -- so its rows read "... JURA BLANC 0 98,00", and the 0 is the whole
+# difference between a find and a bottle that is gone.
+#
+# Only a zero is read. The column carries no label once the PDF is flattened
+# to text, so a *non-zero* number there could as easily be a vintage, a case
+# size or a cellar bay, and calling it stock would be a guess. A zero is none
+# of those -- no wine is vintage 0, and no row costs 0 -- and it is the only
+# value that changes what we do with the row.
+ZERO_STOCK_BEFORE_PRICE = re.compile(
+    r"(?<![\d.,/])\b0\s+(?=\d{1,4}[.,]\d{2}\s*\*?\s*$)")
+
 # The same shape mid-line, for the entries that put the price before a
 # trailing note. Deliberately not used to *find* the entry's end -- only to
 # read a price out of a line already known to end one.
@@ -83,6 +96,45 @@ FURNITURE = re.compile(
 # lines and its price on the next -- treating "2023" as furniture reset the
 # buffer and left the price with no wine attached to it.
 PAGE_NUMBER = re.compile(r"^\d{1,3}\s*$")
+# The same thing spelled out, which is how a footer usually reads: "Page 1
+# sur 84", "Page 2 of 84". Each one differs from the last, so no
+# repeated-line rule can catch them.
+PAGE_MARKER = re.compile(r"^page\s+\d{1,4}\s*(?:sur|of|van|de|/)\s*\d{1,4}\s*$", re.I)
+
+# A running header or footer, found by where it sits rather than by its
+# wording: FURNITURE cannot list the phrasing of every list we will ever
+# read -- it knew "Naam Streek" and not "Nb Nom Famille Sous Stock Prix", so
+# wineshopbiarritz's column header buffered like a producer name and three
+# Ganevat rows were titled with it.
+#
+# Recurrence alone is not enough, and the first version of this made exactly
+# that mistake. In a ragged list a grower's name is repeated once per wine,
+# so "repeated three times" matched `Renaud Bruyère-Houillon` and dropped a
+# watched producer out of purewijnen's list entirely. What separates a header
+# from a grower is position: a header is reprinted at the edge of every page,
+# and a grower's name appears wherever their wines happen to fall.
+EDGE_LINES = 3
+PAGES_BEFORE_FURNITURE = 3
+
+
+def _running_furniture(pages):
+    """Lines printed at the edge of at least three pages: the document's own
+    letterhead, not its wines.
+
+    Needs the pages, so a caller with only flat text gets no detection rather
+    than a guess -- `_fetch_via_pdf_list` has them from `extract_text`. A
+    priced line never qualifies however it repeats: dropping one drops a wine.
+    """
+    seen_on = {}
+    for number, page in enumerate(pages or []):
+        lines = [ln.strip() for ln in page.splitlines() if ln.strip()]
+        edges = lines[:EDGE_LINES] + lines[-EDGE_LINES:]
+        for line in set(edges):
+            if PRICE_AT_END.search(line):
+                continue
+            seen_on.setdefault(line, set()).add(number)
+    return {line for line, pages_seen in seen_on.items()
+            if len(pages_seen) >= PAGES_BEFORE_FURNITURE}
 
 # An entry needs a name in it somewhere. Two letters is enough to reject the
 # letterhead's postcode line without rejecting a terse cuvée.
@@ -105,7 +157,23 @@ def _price_on(line):
 
 def _sold_on(line):
     lowered = textnorm.strip_accents(line).strip().lower()
-    return any(lowered.endswith(marker) for marker in SOLD_MARKERS)
+    if any(lowered.endswith(marker) for marker in SOLD_MARKERS):
+        return True
+    # An inventory export says the same thing with a number.
+    return bool(ZERO_STOCK_BEFORE_PRICE.search(line))
+
+
+def _without_price(line):
+    """The line with its price -- and the stock count in front of it --
+    removed.
+
+    A wine's name is not its price. Leaving the numbers in meant the title,
+    and therefore the item's URL fragment, changed whenever the price or the
+    stock did: `notify` keys remembered items on that URL, so every price
+    change read as a brand-new wine and never as the price *drop* it was.
+    """
+    trimmed = PRICE_AT_END.sub("", line)
+    return re.sub(r"(?<![\d.,/])\b\d{1,3}\s*$", "", trimmed).strip()
 
 
 def _slug(text, limit=60):
@@ -130,7 +198,7 @@ def list_date(text):
     return match.group(1).strip() if match else ""
 
 
-def parse_wine_list(text, source_url):
+def parse_wine_list(text, source_url, pages=None):
     """[{text, title, price, url, variant_title, in_stock}] from a PDF's text.
 
     Every item's URL is the document plus a fragment naming the wine, because
@@ -138,6 +206,7 @@ def parse_wine_list(text, source_url):
     collapse them all into a single remembered item.
     """
     items, buffer, seen = [], [], set()
+    furniture = _running_furniture(pages)
     for raw in text.splitlines():
         line = raw.rstrip()
         # Not a buffer reset: an entry whose cuvée field is empty renders as a
@@ -150,7 +219,12 @@ def parse_wine_list(text, source_url):
         if FURNITURE.match(line.strip()):
             buffer = []
             continue
-        if PAGE_NUMBER.match(line.strip()):
+        if PAGE_NUMBER.match(line.strip()) or PAGE_MARKER.match(line.strip()):
+            continue
+        # Skipped, but the buffer is left alone: a running header lands in the
+        # middle of the list, and clearing here would cut a producer's name
+        # off the price two lines below it.
+        if line.strip() in furniture:
             continue
 
         price = _price_on(line)
@@ -171,7 +245,7 @@ def parse_wine_list(text, source_url):
         if letters < MIN_ENTRY_LETTERS:
             continue
 
-        title = _title_of(block)
+        title = _title_of([_without_price(ln) for ln in block])
         url = f"{source_url}#{_slug(title)}"
         if url in seen:
             # The same wine at two vintages differs further along the block,

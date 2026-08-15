@@ -29,6 +29,7 @@ producers:
     default: domaine
     negoce_marks:
     - anne
+    - negoce
     negoce_default: negoce_unclassified
     classes:
       domaine:
@@ -69,9 +70,6 @@ producers:
       - cuvee florine
       - cuvee marguerite
       - plein sud
-      - vin jaune
-      - vieux macvin
-      - macvin
 - name: Labet
   region: jura
   reference_750_eur: null
