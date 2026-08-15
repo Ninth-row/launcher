@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -66,6 +67,19 @@ MIN_CATALOGUE_PAGE = 8
 # How many of them to record. Nine regions at twenty pages each would spend
 # a whole run's budget on one shop.
 MAX_CATALOGUE_PATHS = 6
+
+# The probe stops itself on wall clock, exactly as scraper.main() does, and
+# for the same reason: a job killed at the runner's ceiling loses everything.
+# Three runs against demainlesvins died inside the probe step with no report,
+# no artifact and no commit -- `if: always()` steps do not run when the job
+# itself is cancelled -- so the only evidence of ~2 hours of crawling was that
+# nothing appeared. The request budget alone does not bound the time: a
+# throttled host costs TIMEOUT + 5 + 15 + 45 seconds per URL, so even 35
+# requests can outlast a 45-minute job.
+#
+# This must stay comfortably inside `timeout-minutes` in probe.yml, which is
+# the outer backstop and not a substitute for stopping cleanly.
+MAX_PROBE_SECONDS = float(os.environ.get("MAX_PROBE_SECONDS", "2100"))
 
 
 class CannedCrawler:
@@ -405,8 +419,13 @@ def try_parse(platform, shop, response, live=None):
         return None, f"{type(e).__name__}: {e}"
 
 
-def probe_shop(shop, crawler_client):
-    """Try each candidate endpoint until one responds and parses."""
+def probe_shop(shop, crawler_client, deadline=None):
+    """Try each candidate endpoint until one responds and parses.
+
+    `deadline` is a time.monotonic() value past which no new candidate is
+    fetched: the shop reports what it has rather than letting the job be
+    killed with nothing saved.
+    """
     result = {
         "shop": shop["name"],
         "url": shop["url"],
@@ -440,6 +459,15 @@ def probe_shop(shop, crawler_client):
     followed_menu = False
 
     while queue:
+        if deadline is not None and time.monotonic() > deadline:
+            result["attempts"].append(
+                {"url": shop["url"],
+                 "outcome": f"probe deadline reached with {len(queue)} candidate(s) unread"})
+            # `status` starts as "failed", so this has to be set outright.
+            # A page that already parsed still wins: the best_html block below
+            # runs after this break and reports the partial success.
+            result["status"] = "timed_out"
+            break
         platform, url, params, kind = queue.pop(0)
         attempt = {"platform": platform, "url": url}
         try:
@@ -853,8 +881,13 @@ def main(argv=None):
 
     report_path = OUTPUT_DIR / "report.json"
     results = []
+    deadline = time.monotonic() + MAX_PROBE_SECONDS if MAX_PROBE_SECONDS else None
     for i, shop in enumerate(shops, 1):
-        result = probe_shop(shop, crawler_client)
+        if deadline is not None and time.monotonic() > deadline:
+            print(f"Probe deadline reached; {len(shops) - i + 1} shop(s) not "
+                  f"reached: {', '.join(s['name'] for s in shops[i - 1:])}")
+            break
+        result = probe_shop(shop, crawler_client, deadline=deadline)
         results.append(result)
         print(
             f"[{i}/{len(shops)}] {result['shop']}: {result['status']}"
