@@ -196,7 +196,7 @@ shops added from research/guesswork rather than a real observed response
 --apply`, which fetches, parses and flags in a single run against a real
 response; never by hand.
 
-19 shops are currently verified and fetched on every run. Two of them,
+22 shops are currently verified and fetched on every run. Two of them,
 vinovivo and purovino, spent months listed here as "prices are rendered
 client-side" — and that verdict was wrong twice over. The price *was* in
 their HTML; `autoselect._price_nodes` could not see it, because it accepted a
@@ -233,16 +233,41 @@ Five remain unverified, and every one has a tested reason:
     price wall for guests, not client-side rendering. Its `/fr/vignerons`
     index lists 41 growers and none of them is a producer we watch. It has no
     PDF either, which is the question purewijnen made worth asking;
-  - **demainlesvins** answers, and answers with a price wall: 1.34MB of
-    markup, **2 prices, 0 product links** and 32 occurrences of "connexion".
-    Private sales, so the catalogue is behind an account — nothing to read as
-    a guest, and this is not a challenge to work around;
+  - **cuvee3000** answers every path — `/`, `/en`, `/en/wines`, `/fr`, and
+    `/vins.php`, which cannot exist — with the same ~1.3KB of title,
+    `<noscript>` and one `<script>`: no anchor, no meta-refresh, and a body
+    regenerated per request (1223–1463 bytes across eight paths,
+    uncorrelated with path length). A framework redirect publishes a way out
+    for every client; this publishes none, so the only exit is executing the
+    script. That is a gate, and it is answered by not going there;
   - **mifuguemiraisin** is closed, and not for a technical reason: its shop is
     Hiboutik (a French point-of-sale SaaS) at `mifuguemiraisin.hiboutik.com`,
     and **every one of the ten candidate URLs came back `robots.txt
     disallows`**. That is the platform saying no, and it is answered the same
     way a bot challenge is — by not going there. Its own domain is a shopfront
     with nothing to read, which is why the entry points at Hiboutik at all.
+
+**demainlesvins** is the third shop written off from the wrong page, and the
+one that showed a price can be *present and unreadable*. It is PrestaShop 1.7
+running private sales, and its cards genuinely refuse a guest a price: 33 of
+34 carry "Vous devez être connecté pour voir le prix" where the figure would
+be. The old verdict — "1.34MB, 2 prices, 0 product links, 32× connexion" —
+came from its **home page**; its categories hold 300 listings, and the price
+is public one click away, stated twice on the product page (an Open Graph
+meta and PrestaShop's `data-product` island, `show_price: "1"`, with a
+`quantity`).
+
+Every scan missed it for one reason worth remembering: the euro is
+JSON-escaped inside an HTML attribute (`"37,50\u00a0\u20ac"`), so the raw
+markup holds **zero** currency markers and `PRICE_PATTERN` reads no prices on
+a page that plainly has one. Parse the attribute and it unescapes for free.
+So the catalogue is read with configured selectors — `autoselect` finds a card
+*by* its price and cannot read a priceless one, which is the documented
+exception that earns them — and `_price_from_detail_pages` opens a product
+page only for a listing naming a producer we watch: 4 of 432 captured titles
+matched, so the whole catalogue costs about ten requests, capped at 25. Its
+sold-out marker is `product-oos` as a CSS class and nothing in the card's
+text, which is the biarritz stock column in a new costume.
 
 **wineshopbiarritz** is the second document shop, and the one that showed the
 adapter was reading a document without reading its *columns*. Its site is Wix
