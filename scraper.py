@@ -460,6 +460,15 @@ SHOPS = [
         "price_selector": "span.price",
         "verified": False,
     },
+    {
+        "name": "lacaveduchateau",
+        "platform": "html",
+        "url": "https://www.lacaveduchateau.com",
+        "item_selector": "div.product",
+        "title_selector": "h2.product-title",
+        "price_selector": "span.price",
+        "verified": False,
+    },
 ]
 
 
