@@ -977,3 +977,29 @@ def test_a_recorded_path_still_wins_when_it_is_the_best():
     result = probe.probe_shop(shop, client)
 
     assert result["catalog_path"] == "vins"
+
+
+def test_a_bot_challenge_does_not_abort_the_whole_probe(monkeypatch, capsys):
+    """A shop answering 200 with a gate raises Challenged. scraper.main() has
+    always handled it; probe_shop never had to, because until cuvee3000 no
+    candidate raised one -- and an unhandled Challenged does not merely lose
+    that shop, it takes down the run and every other shop's results with it."""
+    class Gated(StubCrawler):
+        def get(self, url, params=None):
+            raise crawler.Challenged(f"{url}: a script-only page")
+
+    shop = {"name": "gated", "url": "https://gated.example", "platform": "html",
+            "item_selector": "div.product", "title_selector": "h2",
+            "price_selector": "span.price", "verified": False}
+    result = probe.probe_shop(shop, Gated({}))       # must not raise
+    assert result["status"] == "blocked"
+    assert any("challenge" in a.get("outcome", "") for a in result["attempts"])
+
+
+def test_a_challenged_shop_is_never_promoted(monkeypatch):
+    """Blocked is not ok. apply_results must leave it unverified."""
+    blocked = {"shop": "gated", "status": "blocked", "detected_platform": None,
+               "products_parsed": 0, "producer_hits": [], "attempts": []}
+    applied, unverified = probe.apply_results([blocked])
+    assert applied == []
+    assert "gated" in unverified

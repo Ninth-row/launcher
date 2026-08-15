@@ -453,6 +453,17 @@ def probe_shop(shop, crawler_client):
             result["attempts"].append(attempt)
             result["status"] = "failed"
             break
+        except crawler.Challenged as e:
+            # A shop answering 200 with a bot gate. scraper.main() has always
+            # handled this; the probe never had to, because until cuvee3000
+            # no candidate raised it -- and an unhandled one here does not
+            # just lose this shop, it aborts the whole run and takes the
+            # other shops' results with it. Stop asking: the rest of this
+            # host's candidates are the same gate.
+            attempt["outcome"] = f"bot challenge: {e}"
+            result["attempts"].append(attempt)
+            result["status"] = "blocked"
+            return result
         except crawler.BudgetExceeded:
             attempt["outcome"] = "run request budget exhausted"
             result["attempts"].append(attempt)
