@@ -166,3 +166,9 @@ producers:
   cuvees: []
   last_verified: null
   verified: false
+- name: Gilbert Gillet
+  region: burgundy
+  reference_750_eur: 150
+  cuvees: []
+  last_verified: null
+  verified: false

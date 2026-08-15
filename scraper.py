@@ -159,6 +159,7 @@ PRODUCERS = {
     "Romain Lawson": ["romain lawson"],
     "Antoine Robles": ["robles"],
     "William Kelley": ["william kelley"],
+    "Gilbert Gillet": ["gilbert gillet"],
 }
 
 # ---------------------------------------------------------------------------
