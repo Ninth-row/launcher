@@ -160,6 +160,7 @@ PRODUCERS = {
     "Antoine Robles": ["robles"],
     "William Kelley": ["william kelley"],
     "Gilbert Gillet": ["gilbert gillet"],
+    "Bernard Bonin": ["bernard bonin"],
 }
 
 # ---------------------------------------------------------------------------

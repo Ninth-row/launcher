@@ -172,3 +172,9 @@ producers:
   cuvees: []
   last_verified: null
   verified: false
+- name: Bernard Bonin
+  region: burgundy
+  reference_750_eur: null
+  cuvees: []
+  last_verified: null
+  verified: false
