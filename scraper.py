@@ -396,14 +396,22 @@ SHOPS = [
     # Private sales of artisan-grower wines, Issy-les-Moulineaux. Its own
     # URLs (/content/5-notre-concept) are PrestaShop-shaped, but the
     # platform is the probe's to determine, not mine.
+    # PrestaShop 1.7, and the one shop here that shows a guest the wine but
+    # not the price: 33 of 34 cards carry "Vous devez etre connecte pour voir
+    # le prix" instead of a figure. autoselect cannot read it -- it finds a
+    # card *by* its price -- so this is the documented exception where
+    # hand-written selectors are earned. The price is public one click away,
+    # on the product page, which `_price_from_detail_pages` opens only for
+    # producers we watch.
     {
         "name": "demainlesvins",
         "platform": "html",
         "url": "https://www.demainlesvins.com",
-        "item_selector": "div.product",
+        "catalog_path": "11-la-selection",
+        "item_selector": "article.product-miniature",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
-        "verified": False,
+        "verified": True,
     },
     # Nuits-Saint-Georges, 4000+ references, Burgundy-led -- the first shop
     # on this list where Roumier is a plausible find rather than a hope.
@@ -845,12 +853,104 @@ def _parse_html_page(shop, html, page_url, min_blocks=None):
             "price": price,
             "url": url,
             "variant_title": "",
+            # Only ever to state "gone": silence from a theme is not a promise
+            # that a bottle is on the shelf, which is why this can set False
+            # and never True.
+            **({"in_stock": False} if autoselect.markup_says_sold_out(node) else {}),
         })
     if items:
         return items, "selectors"
 
     return autoselect.find_products(
         html, page_url, PRICE_PATTERN, parse_price, min_blocks=min_blocks), "auto"
+
+
+# How many product pages one run will open to price a listing that hid its
+# price. This is bounded by *matches*, not by catalogue size: across
+# demainlesvins' captured pages 4 of 432 titles were producers we watch, so a
+# thousand-bottle catalogue costs about ten requests. The cap is the net for a
+# page that matches far more than expected.
+MAX_DETAIL_FETCHES = 25
+
+# PrestaShop 1.7 states the price on the product page twice: an Open Graph
+# meta, and a JSON island on the add-to-cart form. Both are public here --
+# `show_price` is "1" -- even though the *card* refuses it ("Vous devez etre
+# connecte pour voir le prix", on 33 of 34 cards). The JSON is preferred
+# because it also carries `quantity`, which is the only stock statement this
+# shop makes on a detail page.
+PRODUCT_JSON_ATTR = "data-product"
+OG_PRICE = {"property": "product:price:amount"}
+
+
+def detail_price(html):
+    """(price, in_stock) from a product page, or (None, None).
+
+    Note why the whole-page price regex cannot find this: the euro is
+    JSON-escaped inside an HTML attribute (`"37,50\\u00a0\\u20ac"`), so the
+    raw markup holds not one currency marker and `PRICE_PATTERN` reads zero
+    prices on a page that plainly has one. Parsing the attribute unescapes it
+    and `parse_price` then works unmodified.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    node = soup.find(attrs={PRODUCT_JSON_ATTR: True})
+    if node:
+        try:
+            data = json.loads(node[PRODUCT_JSON_ATTR])
+        except (ValueError, TypeError):
+            data = {}
+        price = data.get("price_amount")
+        if price is None:
+            price = parse_price(str(data.get("price") or ""))
+        quantity = data.get("quantity")
+        stock = None if quantity is None else quantity > 0
+        if price:
+            return float(price), stock
+
+    meta = soup.find("meta", attrs=OG_PRICE)
+    if meta and meta.get("content"):
+        try:
+            return float(meta["content"]), None
+        except ValueError:
+            pass
+    return None, None
+
+
+def _price_from_detail_pages(shop, items, crawler_client):
+    """Open the product page for matched listings whose price the catalogue
+    withheld.
+
+    demainlesvins shows a guest the wine, the region, the vintage and a
+    "connect to see the price" button. The bottle is not hidden -- only its
+    price is, and only on the card. Rather than give up the shop or report a
+    catalogue of NOREF, follow the ones that matter: a listing is only opened
+    when it names a producer we watch and has no price yet.
+    """
+    wanted = [i for i in items
+              if i.get("price") is None and i.get("url") and match_producers(i["text"])]
+    if not wanted:
+        return 0
+
+    priced = 0
+    for item in wanted[:MAX_DETAIL_FETCHES]:
+        try:
+            page = crawler_client.get(item["url"])
+            page.raise_for_status()
+        except (crawler.BudgetExceeded, crawler.CircuitOpen):
+            break
+        except (crawler.UpstreamError, crawler.Challenged):
+            continue
+        price, stock = detail_price(page.text or "")
+        if price is None:
+            continue
+        item["price"] = price
+        priced += 1
+        # The card said nothing about stock; the detail page counts bottles.
+        if stock is False:
+            item["in_stock"] = False
+    if priced:
+        print(f"[{shop['name']}] priced {priced} matched listing(s) from their "
+              f"product pages; the catalogue shows a guest no price")
+    return priced
 
 
 def _fetch_via_producer_index(shop, index_html, index_url, crawler_client):
@@ -1043,6 +1143,13 @@ def fetch_html(shop, crawler_client):
         how = how or page_how
         if page_html and not first_html:
             first_html, first_url = page_html, start
+
+    # Before the no-items fallbacks: this shop's catalogue parsed fine, it
+    # just withholds the price from a card. That is a different failure from
+    # "nothing to read", and it is only worth requests for the wines we watch.
+    if items and any(i.get("price") is None for i in items):
+        if _price_from_detail_pages(shop, items, crawler_client):
+            how = how or "detail"
 
     if not items and first_html:
         items = _fetch_via_pdf_list(shop, first_html, first_url, crawler_client)

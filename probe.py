@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -66,6 +67,19 @@ MIN_CATALOGUE_PAGE = 8
 # How many of them to record. Nine regions at twenty pages each would spend
 # a whole run's budget on one shop.
 MAX_CATALOGUE_PATHS = 6
+
+# The probe stops itself on wall clock, exactly as scraper.main() does, and
+# for the same reason: a job killed at the runner's ceiling loses everything.
+# Three runs against demainlesvins died inside the probe step with no report,
+# no artifact and no commit -- `if: always()` steps do not run when the job
+# itself is cancelled -- so the only evidence of ~2 hours of crawling was that
+# nothing appeared. The request budget alone does not bound the time: a
+# throttled host costs TIMEOUT + 5 + 15 + 45 seconds per URL, so even 35
+# requests can outlast a 45-minute job.
+#
+# This must stay comfortably inside `timeout-minutes` in probe.yml, which is
+# the outer backstop and not a substitute for stopping cleanly.
+MAX_PROBE_SECONDS = float(os.environ.get("MAX_PROBE_SECONDS", "2100"))
 
 
 class CannedCrawler:
@@ -181,6 +195,12 @@ def describe_price_lines(text):
 DATA_SCRIPT_MARKERS = ("SQUARESPACE_CONTEXT", "__NEXT_DATA__", "__NUXT__",
                        "window.ShopifyAnalytics", "dataLayer.push")
 DATA_SCRIPT_CAP = 20_000
+# Below this, keep the page exactly as it arrived. A document this small has
+# no structure to strip down to, and if it holds a script that script is the
+# whole story.
+SCRIPT_IS_THE_PAGE_BYTES = 4_000
+# Enough of a robots.txt to see which group applies to us.
+ROBOTS_LINES_SHOWN = 25
 
 
 def _is_data_script(tag):
@@ -211,13 +231,27 @@ def save_diagnostic_page(name, url, body):
         return
 
     soup = BeautifulSoup(body, "html.parser")
-    for tag in soup(["style", "noscript", "svg"]):
-        tag.decompose()
-    for tag in soup("script"):
-        if _is_data_script(tag):
-            tag.string = (tag.string or "")[:DATA_SCRIPT_CAP]
-        else:
+    # On a page this small the script *is* the page, so stripping it saves
+    # nothing and destroys the only evidence there is. cuvee3000 answers every
+    # path with ~1.3KB of title, <noscript> and one <script>; captured under
+    # the usual rules that arrived in git as `<html><title>You are being
+    # redirected...</title></html>`, from which nobody can tell a language
+    # redirect from a bot gate -- the one question that decides whether the
+    # shop may be read at all.
+    # Only when no script here carries data: if one does, the existing rule
+    # already keeps the evidence and the behaviour scripts are still noise.
+    whole_page_is_script = (
+        len(body) <= SCRIPT_IS_THE_PAGE_BYTES
+        and not any(_is_data_script(t) for t in soup("script"))
+    )
+    if not whole_page_is_script:
+        for tag in soup(["style", "noscript", "svg"]):
             tag.decompose()
+        for tag in soup("script"):
+            if _is_data_script(tag):
+                tag.string = (tag.string or "")[:DATA_SCRIPT_CAP]
+            else:
+                tag.decompose()
     trimmed = soup.prettify()[:DIAGNOSTIC_CAP]
     (DIAGNOSTIC_DIR / f"{stem}.html").write_text(
         f"<!-- {url}\n     {describe_unparsed(body)}\n"
@@ -385,8 +419,13 @@ def try_parse(platform, shop, response, live=None):
         return None, f"{type(e).__name__}: {e}"
 
 
-def probe_shop(shop, crawler_client):
-    """Try each candidate endpoint until one responds and parses."""
+def probe_shop(shop, crawler_client, deadline=None):
+    """Try each candidate endpoint until one responds and parses.
+
+    `deadline` is a time.monotonic() value past which no new candidate is
+    fetched: the shop reports what it has rather than letting the job be
+    killed with nothing saved.
+    """
     result = {
         "shop": shop["name"],
         "url": shop["url"],
@@ -420,6 +459,15 @@ def probe_shop(shop, crawler_client):
     followed_menu = False
 
     while queue:
+        if deadline is not None and time.monotonic() > deadline:
+            result["attempts"].append(
+                {"url": shop["url"],
+                 "outcome": f"probe deadline reached with {len(queue)} candidate(s) unread"})
+            # `status` starts as "failed", so this has to be set outright.
+            # A page that already parsed still wins: the best_html block below
+            # runs after this break and reports the partial success.
+            result["status"] = "timed_out"
+            break
         platform, url, params, kind = queue.pop(0)
         attempt = {"platform": platform, "url": url}
         try:
@@ -433,6 +481,17 @@ def probe_shop(shop, crawler_client):
             result["attempts"].append(attempt)
             result["status"] = "failed"
             break
+        except crawler.Challenged as e:
+            # A shop answering 200 with a bot gate. scraper.main() has always
+            # handled this; the probe never had to, because until cuvee3000
+            # no candidate raised it -- and an unhandled one here does not
+            # just lose this shop, it aborts the whole run and takes the
+            # other shops' results with it. Stop asking: the rest of this
+            # host's candidates are the same gate.
+            attempt["outcome"] = f"bot challenge: {e}"
+            result["attempts"].append(attempt)
+            result["status"] = "blocked"
+            return result
         except crawler.BudgetExceeded:
             attempt["outcome"] = "run request budget exhausted"
             result["attempts"].append(attempt)
@@ -822,8 +881,13 @@ def main(argv=None):
 
     report_path = OUTPUT_DIR / "report.json"
     results = []
+    deadline = time.monotonic() + MAX_PROBE_SECONDS if MAX_PROBE_SECONDS else None
     for i, shop in enumerate(shops, 1):
-        result = probe_shop(shop, crawler_client)
+        if deadline is not None and time.monotonic() > deadline:
+            print(f"Probe deadline reached; {len(shops) - i + 1} shop(s) not "
+                  f"reached: {', '.join(s['name'] for s in shops[i - 1:])}")
+            break
+        result = probe_shop(shop, crawler_client, deadline=deadline)
         results.append(result)
         print(
             f"[{i}/{len(shops)}] {result['shop']}: {result['status']}"
@@ -854,6 +918,19 @@ def main(argv=None):
     print(f"Requests used: {crawler_client.request_count}/{crawler_client.max_requests}")
     if crawler_client.skipped_disallowed:
         print(f"robots.txt disallowed {len(crawler_client.skipped_disallowed)} URL(s).")
+        # And what it actually said. "robots.txt disallows" alone cannot
+        # distinguish a host that refuses everyone from a rule we read too
+        # strictly -- and the file that would settle it sits behind the same
+        # refusal, so it can never be captured. This is the copy we already
+        # fetched to make the decision.
+        for host in sorted({urlparse(u).netloc for u in crawler_client.skipped_disallowed}):
+            status, text = crawler_client.robots_seen.get(host, ("?", ""))
+            rules = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+            print(f"    {host} robots.txt (HTTP {status}), {len(rules)} rule line(s):")
+            for line in rules[:ROBOTS_LINES_SHOWN]:
+                print(f"      {line}")
+            if len(rules) > ROBOTS_LINES_SHOWN:
+                print(f"      ... {len(rules) - ROBOTS_LINES_SHOWN} more")
 
     for r in results:
         if r["status"] != "ok":

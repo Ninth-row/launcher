@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import time
+
 import pytest
 
 import autoselect
@@ -502,7 +504,7 @@ def test_an_unverified_shop_is_reported_with_its_reason(monkeypatch, capsys):
         "attempts": [{"url": "https://naturavin.example/shop",
                       "outcome": "no connection to the host"}],
     }
-    monkeypatch.setattr(probe, "probe_shop", lambda shop, client: failed)
+    monkeypatch.setattr(probe, "probe_shop", lambda shop, client, **kw: failed)
     monkeypatch.setattr(probe.crawler, "Crawler", lambda *a, **k: StubCrawler({}))
     monkeypatch.setattr(probe, "apply_results", lambda results: ([], ["naturavin"]))
 
@@ -529,7 +531,7 @@ def test_capturing_pages_does_not_cancel_the_probe(monkeypatch, tmp_path, capsys
 
     monkeypatch.setattr(probe.crawler, "Crawler", lambda *a, **k: Recording({}))
     monkeypatch.setattr(probe, "probe_shop",
-                        lambda shop, client: {"shop": shop["name"], "status": "failed",
+                        lambda shop, client, **kw: {"shop": shop["name"], "status": "failed",
                                               "detected_platform": None, "attempts": [],
                                               "products_parsed": 0, "producer_hits": []})
 
@@ -977,3 +979,64 @@ def test_a_recorded_path_still_wins_when_it_is_the_best():
     result = probe.probe_shop(shop, client)
 
     assert result["catalog_path"] == "vins"
+
+
+def test_a_bot_challenge_does_not_abort_the_whole_probe(monkeypatch, capsys):
+    """A shop answering 200 with a gate raises Challenged. scraper.main() has
+    always handled it; probe_shop never had to, because until cuvee3000 no
+    candidate raised one -- and an unhandled Challenged does not merely lose
+    that shop, it takes down the run and every other shop's results with it."""
+    class Gated(StubCrawler):
+        def get(self, url, params=None):
+            raise crawler.Challenged(f"{url}: a script-only page")
+
+    shop = {"name": "gated", "url": "https://gated.example", "platform": "html",
+            "item_selector": "div.product", "title_selector": "h2",
+            "price_selector": "span.price", "verified": False}
+    result = probe.probe_shop(shop, Gated({}))       # must not raise
+    assert result["status"] == "blocked"
+    assert any("challenge" in a.get("outcome", "") for a in result["attempts"])
+
+
+def test_a_challenged_shop_is_never_promoted(monkeypatch):
+    """Blocked is not ok. apply_results must leave it unverified."""
+    blocked = {"shop": "gated", "status": "blocked", "detected_platform": None,
+               "products_parsed": 0, "producer_hits": [], "attempts": []}
+    applied, unverified = probe.apply_results([blocked])
+    assert applied == []
+    assert "gated" in unverified
+
+
+def test_the_probe_stops_itself_before_the_job_is_killed():
+    """Three runs against demainlesvins died inside the probe step: no report,
+    no artifact, no commit, and no explanation -- `if: always()` steps do not
+    run when the job itself is cancelled, so ~2 hours of crawling left no
+    trace. The request budget does not bound the time; a throttled host costs
+    TIMEOUT + 5 + 15 + 45 seconds per URL."""
+    fetched = []
+
+    class Slow(StubCrawler):
+        def get(self, url, params=None):
+            fetched.append(url)
+            return crawler.FetchResult(200, "<html><body><p>x</p></body></html>")
+
+    shop = {"name": "slow", "url": "https://slow.example", "platform": "html",
+            "item_selector": "div.product", "title_selector": "h2",
+            "price_selector": "span.price", "verified": False}
+    # A deadline already past: no clock stub needed to say "out of time".
+    result = probe.probe_shop(shop, Slow({}), deadline=time.monotonic() - 1)
+    assert result["status"] == "timed_out"
+    assert fetched == [], "a candidate was fetched after the deadline"
+    assert any("deadline" in a.get("outcome", "") for a in result["attempts"])
+
+
+def test_a_probe_with_no_deadline_is_unchanged():
+    """The deadline is optional: every existing caller passes none."""
+    class Dead(StubCrawler):
+        def get(self, url, params=None):
+            raise crawler.UpstreamError("refused")
+    shop = {"name": "x", "url": "https://x.example", "platform": "html",
+            "item_selector": "div.product", "title_selector": "h2",
+            "price_selector": "span.price", "verified": False}
+    result = probe.probe_shop(shop, Dead({}))
+    assert result["status"] in ("failed", "host_unreachable")
