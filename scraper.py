@@ -467,7 +467,7 @@ SHOPS = [
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
-        "verified": False,
+        "verified": True,
     },
 ]
 
