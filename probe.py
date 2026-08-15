@@ -181,6 +181,12 @@ def describe_price_lines(text):
 DATA_SCRIPT_MARKERS = ("SQUARESPACE_CONTEXT", "__NEXT_DATA__", "__NUXT__",
                        "window.ShopifyAnalytics", "dataLayer.push")
 DATA_SCRIPT_CAP = 20_000
+# Below this, keep the page exactly as it arrived. A document this small has
+# no structure to strip down to, and if it holds a script that script is the
+# whole story.
+SCRIPT_IS_THE_PAGE_BYTES = 4_000
+# Enough of a robots.txt to see which group applies to us.
+ROBOTS_LINES_SHOWN = 25
 
 
 def _is_data_script(tag):
@@ -211,13 +217,27 @@ def save_diagnostic_page(name, url, body):
         return
 
     soup = BeautifulSoup(body, "html.parser")
-    for tag in soup(["style", "noscript", "svg"]):
-        tag.decompose()
-    for tag in soup("script"):
-        if _is_data_script(tag):
-            tag.string = (tag.string or "")[:DATA_SCRIPT_CAP]
-        else:
+    # On a page this small the script *is* the page, so stripping it saves
+    # nothing and destroys the only evidence there is. cuvee3000 answers every
+    # path with ~1.3KB of title, <noscript> and one <script>; captured under
+    # the usual rules that arrived in git as `<html><title>You are being
+    # redirected...</title></html>`, from which nobody can tell a language
+    # redirect from a bot gate -- the one question that decides whether the
+    # shop may be read at all.
+    # Only when no script here carries data: if one does, the existing rule
+    # already keeps the evidence and the behaviour scripts are still noise.
+    whole_page_is_script = (
+        len(body) <= SCRIPT_IS_THE_PAGE_BYTES
+        and not any(_is_data_script(t) for t in soup("script"))
+    )
+    if not whole_page_is_script:
+        for tag in soup(["style", "noscript", "svg"]):
             tag.decompose()
+        for tag in soup("script"):
+            if _is_data_script(tag):
+                tag.string = (tag.string or "")[:DATA_SCRIPT_CAP]
+            else:
+                tag.decompose()
     trimmed = soup.prettify()[:DIAGNOSTIC_CAP]
     (DIAGNOSTIC_DIR / f"{stem}.html").write_text(
         f"<!-- {url}\n     {describe_unparsed(body)}\n"
@@ -854,6 +874,19 @@ def main(argv=None):
     print(f"Requests used: {crawler_client.request_count}/{crawler_client.max_requests}")
     if crawler_client.skipped_disallowed:
         print(f"robots.txt disallowed {len(crawler_client.skipped_disallowed)} URL(s).")
+        # And what it actually said. "robots.txt disallows" alone cannot
+        # distinguish a host that refuses everyone from a rule we read too
+        # strictly -- and the file that would settle it sits behind the same
+        # refusal, so it can never be captured. This is the copy we already
+        # fetched to make the decision.
+        for host in sorted({urlparse(u).netloc for u in crawler_client.skipped_disallowed}):
+            status, text = crawler_client.robots_seen.get(host, ("?", ""))
+            rules = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+            print(f"    {host} robots.txt (HTTP {status}), {len(rules)} rule line(s):")
+            for line in rules[:ROBOTS_LINES_SHOWN]:
+                print(f"      {line}")
+            if len(rules) > ROBOTS_LINES_SHOWN:
+                print(f"      ... {len(rules) - ROBOTS_LINES_SHOWN} more")
 
     for r in results:
         if r["status"] != "ok":

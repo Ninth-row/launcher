@@ -436,7 +436,14 @@ def is_out_of_stock(text, normalize_fn=None):
 # whole catalogue sold out -- a failure that suppresses finds instead of
 # adding noise, so nothing would ever report it.
 OUT_OF_STOCK_CLASSES = {"outofstock", "out-of-stock", "out_of_stock",
-                        "sold-out", "soldout", "epuise"}
+                        "sold-out", "soldout", "epuise",
+                        # PrestaShop 1.7's own token. demainlesvins marks a
+                        # gone bottle with this and nothing else -- the card's
+                        # text reads exactly like an available one, no
+                        # "epuise", no "rupture" -- so without it a sold-out
+                        # wine is a find, and writing it to seen.json is what
+                        # silences the restock.
+                        "product-oos"}
 OUT_OF_STOCK_SCHEMA = "schema.org/outofstock"
 
 

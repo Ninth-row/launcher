@@ -487,3 +487,95 @@ def test_a_challenging_host_eventually_trips_the_breaker(monkeypatch, tmp_cache)
 
     with pytest.raises(crawler_mod.CircuitOpen):
         client.get("https://challenged.example/anything")
+
+
+# --- a gate that states nothing at all ---------------------------------------
+
+# Reconstructed from the census probe.py recorded for the real bodies --
+# `htmlx1, titlex1, noscriptx1, scriptx1`, ~1.3KB, zero anchors -- because the
+# capture pipeline stripped the script before committing it, which is the
+# gap SCRIPT_IS_THE_PAGE_BYTES now closes. The shape is what matters here.
+CUVEE3000_SHIM = (
+    "<html><title>You are being redirected...</title>"
+    "<noscript>Please enable JavaScript to continue.</noscript>"
+    "<script>var _0x=['\\x68\\x74'];(function(){document.cookie=_0x;"
+    "location.reload();})();</script></html>"
+)
+
+
+def test_a_script_only_page_with_no_way_out_is_a_challenge():
+    """cuvee3000.com answers every path -- including /vins.php, which cannot
+    exist -- with this. No phrase from CHALLENGE_PHRASES appears, so it read
+    as "ok, 0 products" and went into the 6h cache: vinnaturel exactly."""
+    assert crawler_mod.looks_like_challenge(CUVEE3000_SHIM)
+
+
+def test_a_framework_redirect_page_is_not_a_challenge():
+    """Laravel, Symfony and Django all publish a way out for every client.
+    Requiring BOTH a missing anchor and a missing meta-refresh is what keeps
+    an ordinary redirect body out -- a false positive takes a working shop
+    dark, which is worse than the failure this replaces."""
+    with_anchor = ('<html><script>x()</script><noscript>no js</noscript>'
+                   '<a href="/target">Redirecting to /target</a></html>')
+    with_meta = ('<html><meta http-equiv="refresh" content="0;url=/en/wines">'
+                 '<script>x()</script><noscript>no js</noscript></html>')
+    assert crawler_mod.looks_like_challenge(with_anchor) is None
+    assert crawler_mod.looks_like_challenge(with_meta) is None
+
+
+def test_a_real_catalogue_is_never_called_a_challenge():
+    """The guard that matters most. A shop page carries anchors, so it can
+    never reach the script-only arm however many scripts it has."""
+    page = ("<html><head><script>analytics()</script></head><body>"
+            "<noscript>enable js</noscript>"
+            + "".join(f'<a href="/wine/{i}">Cuvee {i} 25,00 &euro;</a>' for i in range(30))
+            + "</body></html>")
+    assert crawler_mod.looks_like_challenge(page) is None
+
+
+def test_a_big_page_is_never_called_a_challenge_on_shape_alone():
+    """A gate is small because it has nothing to say. Size is a required
+    condition, not a hint."""
+    big = ("<html><script>x()</script><noscript>no js</noscript>"
+           + "<p>wine</p>" * 2000 + "</html>")
+    assert len(big) > crawler_mod.CHALLENGE_MAX_BYTES
+    assert crawler_mod.looks_like_challenge(big) is None
+
+
+# --- a refusal has to say what it was ----------------------------------------
+
+def test_the_robots_txt_that_refused_us_is_kept(monkeypatch, tmp_path):
+    """"robots.txt disallows" alone cannot tell a host that refuses everyone
+    from a rule we read too strictly, and the file that would settle it sits
+    behind the same refusal -- `--capture .../robots.txt` is itself
+    disallowed. Nothing extra goes on the wire: this is the copy already
+    fetched to make the decision."""
+    rules = "User-agent: *\nDisallow: /\n"
+
+    def fake_get(url, headers=None, timeout=None):
+        assert url.endswith("/robots.txt")
+        return FakeResp(200, rules)
+
+    monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
+    monkeypatch.setattr(crawler_mod.time, "sleep", lambda *_: None)
+    client = crawler_mod.Crawler(cache_dir=tmp_path)
+
+    with pytest.raises(crawler_mod.Disallowed):
+        client.get("https://shut.example/shop")
+
+    status, text = client.robots_seen["shut.example"]
+    assert status == 200
+    assert "Disallow: /" in text
+
+
+def test_an_unreachable_robots_txt_is_recorded_as_such(monkeypatch, tmp_path):
+    """It is treated as allow-all, and the report must be able to say that
+    is why rather than implying the host published permission."""
+    def fake_get(url, headers=None, timeout=None):
+        raise crawler_mod.requests.RequestException("no route")
+
+    monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
+    client = crawler_mod.Crawler(cache_dir=tmp_path)
+    client._robots_for("https://gone.example/shop")
+    status, text = client.robots_seen["gone.example"]
+    assert status is None and "unreachable" in text

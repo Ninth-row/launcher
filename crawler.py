@@ -157,6 +157,30 @@ CHALLENGE_MAX_LINKS = 2
 META_REFRESH = re.compile(
     r"""<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']([^"']+)["']""", re.I)
 
+# A gate that states nothing at all. cuvee3000.com answers every path -- `/`,
+# `/en`, `/en/wines`, `/fr`, and `/vins.php`, which cannot exist -- with the
+# same ~1.3KB document: a title, one <noscript>, one <script>, and not a
+# single anchor. No phrase from CHALLENGE_PHRASES appears, so it read as
+# "ok, 0 products" and went into the 6h cache, which is the vinnaturel
+# failure exactly.
+#
+# What identifies it is the absence of every non-JS way out. A framework's
+# redirect body (Laravel, Symfony, Django) always publishes a meta-refresh or
+# an <a href> fallback, because it wants every client to arrive; this one
+# publishes neither, so the only exit is executing the script. Requiring
+# *both* of those to be missing is what keeps an ordinary redirect page out,
+# and it must stay a hard requirement rather than a score -- a false positive
+# here takes a working shop dark.
+#
+# The bodies also differ in size per URL (1223-1463 bytes across eight paths,
+# uncorrelated with path length), which is a payload regenerated per request.
+# Nobody re-nonces a language redirect. Do not try to run it.
+CHALLENGE_MAX_BYTES = 4_000
+
+# Enough of a robots.txt to read its groups in a run log. These files are
+# small; a host that answers with megabytes is not answering with rules.
+ROBOTS_KEPT_BYTES = 4_000
+
 
 def looks_like_challenge(text):
     """Why this 200 is not content, or None if it is.
@@ -176,6 +200,12 @@ def looks_like_challenge(text):
         for phrase in CHALLENGE_PHRASES:
             if phrase in lowered:
                 return f"interstitial saying {phrase!r}"
+    if (len(body) <= CHALLENGE_MAX_BYTES
+            and "<script" in lowered
+            and "<noscript" in lowered
+            and "<a " not in lowered
+            and not refresh):
+        return "a script-only page with no link and no meta-refresh out of it"
     return None
 
 
@@ -240,6 +270,8 @@ class Crawler:
         self._broken_hosts = set()
         self._host_locks = defaultdict(threading.Lock)
 
+        # host -> (status, text) of its robots.txt, as received.
+        self.robots_seen = {}
         self.skipped_disallowed = []
         self.skipped_budget = []
         self.skipped_circuit = []
@@ -256,11 +288,19 @@ class Crawler:
         rp.set_url(robots_url)
         try:
             resp = requests.get(robots_url, timeout=TIMEOUT, headers={"User-Agent": self.user_agent})
+            # Keep what it said. A disallow is otherwise undiagnosable: the
+            # rules that refuse a URL live behind the same refusal, so
+            # `--capture https://host/robots.txt` is itself disallowed and we
+            # cannot tell "Disallow: /" from a parser of ours reading the file
+            # too strictly. Nothing extra goes on the wire -- RFC 9309 has us
+            # fetch this on every host already; we simply stop discarding it.
+            self.robots_seen[host] = (resp.status_code, resp.text[:ROBOTS_KEPT_BYTES])
             if resp.status_code >= 400:
                 rp.parse([])
             else:
                 rp.parse(resp.text.splitlines())
-        except requests.RequestException:
+        except requests.RequestException as e:
+            self.robots_seen[host] = (None, f"unreachable: {e}")
             rp.parse([])  # unreachable robots.txt -- treat as allow-all
         self._robots_cache[host] = rp
         delay = rp.crawl_delay(self.user_agent) or rp.crawl_delay("*")
