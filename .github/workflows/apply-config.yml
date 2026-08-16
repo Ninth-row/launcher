@@ -27,8 +27,17 @@ jobs:
     # missing label silently skipped a correctly-submitted form -- which is
     # exactly what happened to issue #20. The OWNER check is the security
     # gate and is unaffected; the heading match just identifies which form.
+    # OWNER *or* MEMBER, because those are the same person under two
+    # different ownership models and neither is a name. A personal repo calls
+    # its owner OWNER; a repo owned by an organisation has no OWNER at all --
+    # its people are MEMBER -- so an OWNER-only gate stops applying every
+    # config change the moment the project moves to an org, silently and
+    # without failing anything. MEMBER cannot appear on a personal repo, and
+    # org membership is invite-only, so this widens nothing: on a solo org it
+    # still means exactly one person.
     if: >
-      github.event.issue.author_association == 'OWNER' &&
+      (github.event.issue.author_association == 'OWNER' ||
+       github.event.issue.author_association == 'MEMBER') &&
       (contains(github.event.issue.labels.*.name, 'add-producer') ||
        contains(github.event.issue.labels.*.name, 'add-shop') ||
        contains(github.event.issue.body, '### Producer name') ||

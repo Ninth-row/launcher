@@ -153,3 +153,30 @@ def test_the_scraper_forces_a_report_only_for_a_dispatched_run():
     env = doc["jobs"]["scrape"]["steps"][-2]["env"]
     assert "workflow_dispatch" in env["FORCE_REPORT"]
     assert "schedule" not in env["FORCE_REPORT"]
+
+
+def test_the_config_form_is_gated_on_who_opened_the_issue():
+    """apply-config.yml commits to main without a PR, so this gate is the only
+    thing between a stranger's issue and the default branch. It must survive a
+    move to an organisation: a personal repo calls its owner OWNER, an org
+    repo has no OWNER at all and calls its people MEMBER, so an OWNER-only
+    test would fail closed on every config change after the move -- silently,
+    because nothing errors."""
+    body = (Path(__file__).parent.parent / ".github" / "workflows"
+            / "apply-config.yml").read_text()
+    gate = body[body.index("if: >"):body.index("runs-on")]
+    assert "author_association" in gate
+    assert "'OWNER'" in gate and "'MEMBER'" in gate
+    # Never a name: the point of the move is that no identity is embedded.
+    assert "github.event.issue.user.login ==" not in gate
+
+
+def test_the_gate_admits_no_one_else():
+    """CONTRIBUTOR and NONE are strangers. COLLABORATOR is deliberately out
+    too -- someone given push access to help is not someone who should be able
+    to drive an unreviewed commit to main from an issue form."""
+    body = (Path(__file__).parent.parent / ".github" / "workflows"
+            / "apply-config.yml").read_text()
+    gate = body[body.index("if: >"):body.index("runs-on")]
+    for role in ("CONTRIBUTOR", "COLLABORATOR", "NONE", "FIRST_TIME"):
+        assert f"'{role}'" not in gate, f"{role} can drive a commit to main"
