@@ -58,6 +58,17 @@ jobs:
         with:
           # The default shallow clone would rewrite one commit and drop 207.
           fetch-depth: 0
+          # Do not leave this job's own credentials in git config. checkout
+          # writes `http.https://github.com/.extraheader` with the
+          # GITHUB_TOKEN, and that header applies to *every* github.com
+          # request and OVERRIDES a username:password embedded in a remote
+          # URL -- so the push below authenticated as github-actions[bot],
+          # which has no access to another owner's repository:
+          #   remote: Permission to <new owner>/launcher.git denied to
+          #   github-actions[bot].
+          # Nothing here needs those credentials: the only fetch is from this
+          # repository, which is public.
+          persist-credentials: false
 
       - name: Install git-filter-repo
         run: pip install git-filter-repo
@@ -224,6 +235,15 @@ jobs:
           fi
           git config user.name  "$NEW_NAME"
           git config user.email "$NEW_EMAIL"
+          # Belt and braces: even with persist-credentials false, refuse to
+          # push while any inherited auth header could outrank the token in
+          # the URL below.
+          git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+          if git config --local --get-regexp '^http\..*\.extraheader$' >/dev/null 2>&1; then
+            echo "An inherited git auth header is still set; it would override"
+            echo "MIGRATE_TOKEN and push as the wrong identity. Refusing."
+            exit 1
+          fi
           git remote remove origin 2>/dev/null || true
           git remote add origin "https://x-access-token:${MIGRATE_TOKEN}@github.com/${NEW_OWNER}/${NEW_REPO}.git"
           git push --all origin
