@@ -201,11 +201,25 @@ jobs:
           NEW_EMAIL: ${{ inputs.new_email }}
           # A fine-grained PAT with Contents: read and write on the new
           # repository, and nothing else. Masked in these logs by Actions.
+          THIS_REPO: ${{ github.repository }}
           MIGRATE_TOKEN: ${{ secrets.MIGRATE_TOKEN }}
         run: |
           set -e
           if [ -z "$MIGRATE_TOKEN" ]; then
-            echo "MIGRATE_TOKEN is not set. Add it under Settings -> Secrets and variables -> Actions."
+            # Name the repository. The Gmail secrets belong to the *new* repo
+            # and this one belongs to the old, which is an easy swap to make
+            # when both are being set up in the same sitting.
+            echo "MIGRATE_TOKEN is not set."
+            echo ""
+            echo "It goes on THIS repository -- ${THIS_REPO} -- the one being"
+            echo "migrated away from, not the new one:"
+            echo "  https://github.com/${THIS_REPO}/settings/secrets/actions"
+            echo "  -> New repository secret"
+            echo "  Name:   MIGRATE_TOKEN"
+            echo "  Secret: a fine-grained token whose Resource owner is"
+            echo "          ${NEW_OWNER}, with Contents: Read and write."
+            echo ""
+            echo "Nothing has been pushed and nothing has changed."
             exit 1
           fi
           git config user.name  "$NEW_NAME"
