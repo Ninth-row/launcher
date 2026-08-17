@@ -215,9 +215,36 @@ jobs:
           git push --all origin
           git push --tags origin
           echo "Pushed. Check https://github.com/${NEW_OWNER}/${NEW_REPO} before deleting anything."
+          # The run page shows this at the top, which matters on a phone where
+          # a green tick is all you see without scrolling.
+          {
+            echo "## Migrated"
+            echo ""
+            echo "Pushed to **${NEW_OWNER}/${NEW_REPO}**."
+            echo ""
+            echo "Next: add the three Gmail secrets there, set Pages, delete"
+            echo "this workflow file, then dry-run the scraper before deleting"
+            echo "the old repository."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Rehearsal only
         if: ${{ !inputs.push }}
         run: |
-          echo "Rehearsal complete: history rewritten and verified, nothing pushed."
-          echo "Re-run with 'Actually push' ticked once the numbers above are all zero."
+          echo "REHEARSAL ONLY -- NOTHING WAS PUSHED."
+          echo "The history was rewritten and verified in this job, then thrown away."
+          echo "To migrate for real: Run workflow again and tick 'Actually push"
+          echo "to the new repository' -- it is the last field, under the four"
+          echo "text boxes."
+          # A green tick with the push step skipped reads exactly like a
+          # finished migration, especially on a phone. Say so where it cannot
+          # be missed: the summary renders at the top of the run page.
+          {
+            echo "## Rehearsal only - nothing was pushed"
+            echo ""
+            echo "The rewrite ran and passed its checks, then was discarded."
+            echo "The new repository is still empty and this one is untouched."
+            echo ""
+            echo "To migrate for real, run this workflow again and tick"
+            echo "**Actually push to the new repository** - the last field,"
+            echo "below the four text boxes."
+          } >> "$GITHUB_STEP_SUMMARY"
