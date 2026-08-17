@@ -62,8 +62,29 @@ jobs:
       - name: Install git-filter-repo
         run: pip install git-filter-repo
 
-      - name: Fetch every branch, not just the default one
-        run: git fetch origin '+refs/heads/*:refs/heads/*' --prune
+      - name: Bring down every branch there is
+        run: |
+          set -e
+          # Into remote-tracking refs, never refs/heads/*. git refuses to
+          # fetch into the branch that is currently checked out, which is
+          # exactly how the first rehearsal of this workflow failed:
+          #   ! [rejected] main -> main (refusing to fetch into checked out
+          #   branch)
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
+          # Then a local branch per remote one, because `git push --all`
+          # later carries local branches and nothing else. Today this repo
+          # has only main; this keeps the job correct if that changes.
+          for ref in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin); do
+            name="${ref#origin/}"
+            if [ "$name" = "HEAD" ]; then
+              continue
+            fi
+            if ! git show-ref --verify --quiet "refs/heads/$name"; then
+              git branch "$name" "$ref"
+            fi
+          done
+          echo "--- branches to migrate ---"
+          git for-each-ref --format='  %(refname:short)' refs/heads
 
       - name: Work out which identities to rewrite
         # Through env: and read as quoted variables. A dispatch box is
