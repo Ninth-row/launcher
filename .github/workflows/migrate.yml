@@ -1,0 +1,202 @@
+name: Migrate To New Owner
+
+# One-shot, manual, and self-deleting in effect: run it, check the new repo,
+# then delete this repo and this file goes with it.
+#
+# It exists because a history rewrite needs git and Python, and the person who
+# owns this project works from a phone. GitHub Actions is the machine.
+#
+# What it does, in one job:
+#   1. takes a full clone of this repository's history
+#   2. rewrites every commit that carries the old owner's identity -- author
+#      fields, file contents and commit messages, which are three separate
+#      hiding places -- onto a neutral name
+#   3. proves the identity is gone before pushing anything
+#   4. pushes the rewritten history to the new repository
+#
+# The old identity is never typed in: the owner login comes from
+# `github.repository_owner`, and the author identities are read out of the
+# repository's own history. Nothing here needs editing to be correct.
+on:
+  workflow_dispatch:
+    inputs:
+      new_owner:
+        description: "Organisation (or account) that will own the project, e.g. ninth-row"
+        type: string
+        required: true
+      new_repo:
+        description: "Repository name under that owner"
+        type: string
+        default: "launcher"
+      new_name:
+        description: "Commit author name to rewrite the old identity to"
+        type: string
+        default: "wine-tracker"
+      new_email:
+        description: "Commit author email to rewrite to"
+        type: string
+        default: "wine-tracker@users.noreply.github.com"
+      push:
+        # Off by default. The rewrite and the proof are worth running on their
+        # own -- read the log, confirm the counts are zero, then run again with
+        # this ticked. A push to a fresh repository is not undoable by tapping.
+        description: "Actually push to the new repository (leave off for a rehearsal)"
+        type: boolean
+        default: false
+
+# No token from this workflow's own GITHUB_TOKEN is used to write anywhere.
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the whole history
+        uses: actions/checkout@v4
+        with:
+          # The default shallow clone would rewrite one commit and drop 207.
+          fetch-depth: 0
+
+      - name: Install git-filter-repo
+        run: pip install git-filter-repo
+
+      - name: Fetch every branch, not just the default one
+        run: git fetch origin '+refs/heads/*:refs/heads/*' --prune
+
+      - name: Work out which identities to rewrite
+        # Through env: and read as quoted variables. A dispatch box is
+        # caller-controlled text and this repo has already been bitten once by
+        # splicing one into a command line.
+        env:
+          OLD_OWNER: ${{ github.repository_owner }}
+          NEW_OWNER: ${{ inputs.new_owner }}
+          NEW_NAME: ${{ inputs.new_name }}
+          NEW_EMAIL: ${{ inputs.new_email }}
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+
+          old_owner = os.environ["OLD_OWNER"]
+          new_owner = os.environ["NEW_OWNER"]
+          new_name  = os.environ["NEW_NAME"]
+          new_email = os.environ["NEW_EMAIL"]
+
+          # Identities that are genuinely not a person: GitHub's own merge
+          # committer, the Actions bot, and the agent. Everything else in this
+          # repository's history is the owner under one spelling or another,
+          # and is rewritten. Erring towards rewriting is the safe direction --
+          # a missed identity is the whole failure this job exists to prevent.
+          KEEP = {
+              "noreply@anthropic.com",
+              "noreply@github.com",
+              "41898282+github-actions[bot]@users.noreply.github.com",
+          }
+
+          out = subprocess.run(
+              ["git", "log", "--all", "--format=%an <%ae>%n%cn <%ce>"],
+              capture_output=True, text=True, check=True).stdout
+
+          identities = sorted({line.strip() for line in out.splitlines() if line.strip()})
+          rewrite = [i for i in identities if i.rsplit("<", 1)[-1].rstrip(">") not in KEEP]
+
+          print("Identities found in history:")
+          for i in identities:
+              print(("  REWRITE  " if i in rewrite else "  keep     ") + i)
+
+          if not rewrite:
+              raise SystemExit("Nothing to rewrite -- check this is the right repository.")
+
+          with open("mailmap", "w") as fh:
+              for i in rewrite:
+                  fh.write(f"{new_name} <{new_email}> {i}\n")
+
+          # Content and commit messages. The owner login appears in wine.html,
+          # dashboard.py and (historically) crawler.py's DEFAULT_CONTACT, and in
+          # every "Merge pull request #N from <owner>/..." message GitHub wrote.
+          with open("replacements", "w") as fh:
+              fh.write(f"{old_owner}==>{new_owner}\n")
+              for i in rewrite:
+                  email = i.rsplit("<", 1)[-1].rstrip(">")
+                  if email != new_email:
+                      fh.write(f"{email}==>{new_email}\n")
+
+          print("\nmailmap:\n" + open("mailmap").read())
+          print("replacements:\n" + open("replacements").read())
+          PY
+
+      - name: Rewrite the history
+        run: |
+          # --force because actions/checkout is not the "fresh clone"
+          # filter-repo expects; the clone is full and disposable either way.
+          git filter-repo --force \
+            --mailmap mailmap \
+            --replace-text replacements \
+            --replace-message replacements
+
+      - name: Prove the identity is gone
+        env:
+          OLD_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -e
+          echo "--- authors after the rewrite ---"
+          git log --all --format='%an <%ae>' | sort | uniq -c | sort -rn
+
+          fail=0
+
+          echo "--- the owner login in any file, in any commit ---"
+          hits=$(git rev-list --all | while read -r c; do
+                   git grep -lI "$OLD_OWNER" "$c" 2>/dev/null
+                 done | wc -l)
+          echo "  $hits"
+          [ "$hits" -eq 0 ] || fail=1
+
+          echo "--- the owner login in any commit message ---"
+          msgs=$(git log --all --format='%s%n%b' | grep -ci "$OLD_OWNER" || true)
+          echo "  $msgs"
+          [ "$msgs" -eq 0 ] || fail=1
+
+          echo "--- the owner login in any author or committer field ---"
+          who=$(git log --all --format='%an <%ae>%n%cn <%ce>' | grep -ci "$OLD_OWNER" || true)
+          echo "  $who"
+          [ "$who" -eq 0 ] || fail=1
+
+          echo "--- commits preserved ---"
+          git rev-list --count --all
+
+          if [ "$fail" -ne 0 ]; then
+            echo "IDENTITY STILL PRESENT -- nothing has been pushed. Do not delete the old repo."
+            exit 1
+          fi
+          echo "Clean."
+
+      - name: Push to the new repository
+        if: inputs.push
+        env:
+          NEW_OWNER: ${{ inputs.new_owner }}
+          NEW_REPO: ${{ inputs.new_repo }}
+          NEW_NAME: ${{ inputs.new_name }}
+          NEW_EMAIL: ${{ inputs.new_email }}
+          # A fine-grained PAT with Contents: read and write on the new
+          # repository, and nothing else. Masked in these logs by Actions.
+          MIGRATE_TOKEN: ${{ secrets.MIGRATE_TOKEN }}
+        run: |
+          set -e
+          if [ -z "$MIGRATE_TOKEN" ]; then
+            echo "MIGRATE_TOKEN is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          git config user.name  "$NEW_NAME"
+          git config user.email "$NEW_EMAIL"
+          git remote remove origin 2>/dev/null || true
+          git remote add origin "https://x-access-token:${MIGRATE_TOKEN}@github.com/${NEW_OWNER}/${NEW_REPO}.git"
+          git push --all origin
+          git push --tags origin
+          echo "Pushed. Check https://github.com/${NEW_OWNER}/${NEW_REPO} before deleting anything."
+
+      - name: Rehearsal only
+        if: ${{ !inputs.push }}
+        run: |
+          echo "Rehearsal complete: history rewritten and verified, nothing pushed."
+          echo "Re-run with 'Actually push' ticked once the numbers above are all zero."
