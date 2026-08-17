@@ -1,9 +1,10 @@
 # Wine producer scraper — setup
 
-Monitors configured French/EU natural wine shops for named producers,
-prices each hit against a manually-maintained reference book, and sends a
-digest email on anything alert-worthy. Runs hourly via GitHub Actions,
-politely (robots.txt, rate limiting, backoff — see `crawler.py`).
+Monitors configured French/EU natural wine shops for named producers, prices
+each hit against reference prices observed from its own crawl, and sends one
+digest email per run on anything alert-worthy. Runs every two hours via GitHub
+Actions, politely (robots.txt, rate limiting, backoff, a circuit breaker and a
+request budget — see `crawler.py`).
 
 ## 1. Install dependencies
 
@@ -11,11 +12,9 @@ politely (robots.txt, rate limiting, backoff — see `crawler.py`).
 pip install -r requirements.txt
 ```
 
-## 2. Configure GitHub secrets and variables
+## 2. Configure GitHub secrets
 
 In the repo's Settings → Secrets and variables → Actions:
-
-Secrets (sensitive):
 
 | Secret               | Value                                            |
 |-----------------------|--------------------------------------------------|
@@ -23,25 +22,33 @@ Secrets (sensitive):
 | `GMAIL_APP_PASSWORD`   | A Gmail [app password](https://myaccount.google.com/apppasswords) for that address (not the account password) |
 | `NOTIFY_EMAIL`         | Where the alert should be sent                   |
 
-Repository variables (not sensitive — this is who the crawler identifies
-itself as, deliberately visible in the User-Agent it sends):
+Those three are the only external configuration there is. The workflow
+(`.github/workflows/scraper.yml`) reads them as environment variables at run
+time, sends them to Gmail's SMTP server and nowhere else, and never prints
+their values.
 
-| Variable        | Value                                                     |
-|-----------------|------------------------------------------------------------|
-| `CONTACT_EMAIL`  | An email a shop operator could reach you at if this bot causes them trouble |
-
-The workflow (`.github/workflows/scraper.yml`) reads these as environment
-variables at run time. It never prints secret values.
+There is deliberately **no** contact-email variable. `CONTACT_EMAIL` used to
+be documented here and `crawler.py` now ignores it: the User-Agent is sent to
+every shop on every request and printed into Actions logs, which are
+world-readable on a public repo, so it identifies nobody. It carries
+`BOT_NAME` alone. To opt back in to a contact that gives nothing away, set
+`CONTACT_URL` to a URL — `Crawler.__init__` raises on anything containing
+`@`, and a test asserts the default agent stays bare.
 
 ## 3. Add / confirm shops
 
 Shops live in the `SHOPS` list in `scraper.py`. Each entry needs a
 `platform` (`shopify`, `woocommerce`, or `html`), the fields that
 platform's fetcher needs, and a `verified` flag. `main()` skips any shop
-with `verified: False` before making a network call — as shipped, every
-shop in `SHOPS` is unverified (added from research, not a real fetch; see
-each fixture's `_note`/leading comment for what's real vs. guessed), so a
-normal run does nothing until shops are confirmed.
+with `verified: False` before making a network call, because that flag means
+the entry came from research rather than a real observed response (platform
+assumed, selectors invented).
+
+22 shops are verified and fetched on every run, so a normal run does real
+work as it stands. Five are unverified and each has a tested reason recorded
+in `CLAUDE.md` — 403, a dead domain, a guest price wall, a JS gate, and one
+whose `robots.txt` refuses every path. Those five are not a to-do list: four
+of them are a shop saying no, and the answer is not going there.
 
 To bring shops online, run the **Probe Shops** workflow with **apply**
 ticked. It fetches each shop's real endpoint, and for every shop that
@@ -60,7 +67,7 @@ Normal run (sends a digest email on anything alert-worthy — requires the
 three secrets above):
 
 ```
-GMAIL_SENDER=... GMAIL_APP_PASSWORD=... NOTIFY_EMAIL=... CONTACT_EMAIL=you@example.com python scraper.py
+GMAIL_SENDER=... GMAIL_APP_PASSWORD=... NOTIFY_EMAIL=... python scraper.py
 ```
 
 Dry run (no SMTP, no secrets needed — prints the would-be digest to stdout
@@ -74,13 +81,21 @@ Useful crawl-layer env vars (see `crawler.py`):
 
 | Var                     | Effect                                                  |
 |--------------------------|----------------------------------------------------------|
-| `CONTACT_EMAIL`           | Included in the User-Agent so a shop operator can reach you |
-| `MAX_REQUESTS_PER_RUN`    | Hard cap on requests this run (default 120); the run stops cleanly and logs unreached shops when hit |
+| `CONTACT_URL`             | A URL added to the User-Agent. An email address is refused |
+| `MAX_REQUESTS_PER_RUN`    | Hard cap on requests this run (default 400, sized to a measured 311-request pass over every catalogue); the run stops cleanly and logs unreached shops when hit |
+| `MAX_RUN_SECONDS`         | Wall-clock cap (default 2700). Checked between shops, so it drops whole shops where the request budget degrades one catalogue — the budget must bind first |
 | `FRESH=1`                 | Bypass the 6h disk cache for this run                    |
+| `FORCE_REPORT=1`          | Report unconditionally, even with nothing new. Set by the workflow on `workflow_dispatch` only |
 
 State/output files (all gitignored, all safe to delete): `seen.json` (per-item
-cooldown state), `.cache/` (the disk cache), `hits.json` (every evaluated hit
-from the last run, regardless of whether it was alert-worthy).
+cooldown state), `observations.json` (the observed price pool the references
+are drawn from), `.cache/` (the disk cache), `hits.json` (every evaluated hit
+from the last run, regardless of whether it was alert-worthy) and
+`coverage.json` (the per-shop coverage table).
+
+Deleting `observations.json` is safe but not free: references are observed
+from our own crawl, so a fresh pool classifies more hits as `NOREF` until
+enough shops have been read again.
 
 ## 5. Check the price book
 
@@ -89,10 +104,27 @@ python pricebook.py --stale
 ```
 
 Lists every producer in `prices.yaml` that's still `verified: false` or
-whose `last_verified` is more than 180 days old. Fill in real numbers
-manually from Wine-Searcher (this project never fetches it automatically —
-that's against their terms), then set `verified: true` and `last_verified`
-to today's date.
+whose `last_verified` is more than 180 days old.
+
+`prices.yaml` is an **optional override**, not the primary source, and
+leaving it blank is the normal case. Reference prices are observed from our
+own crawl (`market.py`): every priced listing is recorded to
+`observations.json`, and a hit is scored against what other shops charge —
+same cuvée and vintage first, then the cuvée's other vintages, then the
+producer's own line, with `None` at the bottom rather than a guess. A
+hand-entered `reference_750_eur` only outranks that when you also set
+`verified: true`; an unverified one deliberately ranks *below* observed data,
+because a guessed number produces a confident wrong verdict where no number
+produces an honest `NOREF`.
+
+Nothing in this project fetches Wine-Searcher — it is blocked and against
+their terms. Fill a number in only from your own knowledge of the range, then
+set `verified: true` and `last_verified` to today's date.
+
+The one place a human number is genuinely needed is `lines:` — a producer
+selling several ranges under one surname (Ganevat's domaine Côtes du Jura at
+~€91 against a négoce line at ~€40) cannot be separated by a pooled average,
+and the observed pool cannot split what a label does not distinguish.
 
 ## 6. Run the tests
 
@@ -112,10 +144,22 @@ workflows or add config. Regenerate locally with `python dashboard.py`; a
 workflow rebuilds it whenever `scraper.py`, `prices.yaml` or `dashboard.py`
 changes on `main`.
 
+Never hand-edit `wine.html`, and never commit a rebuilt copy on a feature
+branch — `main` rebuilds it on the push after a merge, so a branch-side copy
+only produces a merge conflict on a file whose correct resolution is always
+"regenerate it". No test reads it from disk; they render through
+`dashboard.render()`.
+
 If GitHub Pages is enabled for the repo it is served at
-`https://<user>.github.io/launcher/wine.html` (the existing `index.html`
-launcher app keeps the root path). It holds no credentials -- every button
-links out to GitHub, which handles sign-in.
+`https://<owner>.github.io/launcher/wine.html`, and the root `index.html`
+redirects there. The repo slug the page drives is derived from the git remote
+by `dashboard._repo_slug()`, so the generated page is correct under any owner
+and needs no edit if the repository moves.
+
+It holds no credentials: the buttons call the GitHub REST API directly from
+the browser, and the token that authorises them is entered once per device and
+kept in `localStorage` — never written into the generated file. A fine-grained
+token with **Only select repositories** → this repo is what it expects.
 
 ## 8. Changing config from a phone
 
@@ -148,9 +192,29 @@ change is revertible through git.
 Only issues opened by the repo owner are processed -- the repo is public,
 so this gate stops a stranger from driving edits to `scraper.py`.
 
+These forms are also how a config change stays out of the commit log under
+your own name. Everything they commit is authored by `github-actions[bot]`,
+whereas editing a file through GitHub's web editor attaches your account's
+name and email to a public commit — which is what put the previous owner's
+login back into this repository's history after it had been migrated out. Use
+the forms, or a branch, rather than the web editor.
+
 ## Schedule
 
-Hourly at :00 UTC (`0 * * * *`), 24 runs/day. Each run also has a
-`workflow_dispatch` trigger for on-demand runs from the Actions tab, with
-inputs to bypass the cache (`fresh`) or override the request budget
-(`max_requests_per_run`) for that one run.
+Every two hours, UTC (`0 */2 * * *`). It used to ask for hourly and GitHub
+never delivered it: a public repo's scheduled runs are queued at low priority,
+so `0 * * * *` arrived at 20:22, 22:08, 23:55, 02:24, 05:43, 08:27, 11:17 and
+13:55 — and twice a run was cancelled without ever being given a runner, which
+arrives as a failure email that looks exactly like a broken scraper and is not
+one. Asking for 24 runs to receive 10 only adds queue pressure. A
+`concurrency` group keeps a delayed run from overlapping the next one.
+
+Two hours also sits inside the crawler's 6h cache TTL, so the full crawl is
+paid for roughly four times a day rather than every run.
+
+Each run also has a `workflow_dispatch` trigger for on-demand runs from the
+Actions tab, with inputs to bypass the cache (`fresh`), override the request
+budget (`max_requests_per_run`), or print the digest instead of sending it
+(`dry_run`). A dispatched run sets `FORCE_REPORT=1` and so always emails,
+even when nothing is new — that empty table is the only way to tell "nothing
+new" from "credentials expired" from a button you pressed.

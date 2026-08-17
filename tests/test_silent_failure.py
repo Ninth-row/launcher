@@ -291,6 +291,20 @@ def test_producers_are_not_blamed_for_shops_the_run_never_opened(pipeline):
         "the note must say how many shops it is speaking for"
 
 
+def test_the_log_qualifies_found_nowhere_exactly_as_the_email_does(pipeline, capsys):
+    """The same rule, on the other surface. The email note was built from
+    `unseen_title` and the log line hardcoded the bare wording, so a run with
+    the budget binding printed "Watched but found nowhere (20)" to the console
+    -- which is the only surface you have while bringing shops online, before
+    any of the three mail secrets is set."""
+    pipeline(BASIC, max_requests=1, force=True)
+    out = capsys.readouterr().out
+    assert "found nowhere" in out
+    line = [l for l in out.splitlines() if "found nowhere" in l][0]
+    assert "found nowhere in the" in line, \
+        f"the log accuses the aliases for shops it never opened: {line!r}"
+
+
 # --- E. running out of wall clock, cleanly ------------------------------------
 #
 # A cold-cache run of 22 shops took 8m38s against a 10-minute job timeout

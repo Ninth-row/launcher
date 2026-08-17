@@ -1465,6 +1465,9 @@ def main():
     # mean that when every shop was actually read. With shops unreached the
     # same list also holds producers whose shop the run never opened, which
     # is how a budget cut-off turned into an accusation against the aliases.
+    # Both surfaces must carry the qualification: the email did and the log
+    # did not, so a budget-bound run printed the bare accusation to the one
+    # place you actually read while bringing shops online.
     unseen_title = ("Watched but found nowhere" if not unreached else
                     f"Watched but found nowhere in the "
                     f"{len(coverage) - len(unreached)} shop(s) read")
@@ -1472,7 +1475,7 @@ def main():
         print(f"Matched but sold out everywhere ({len(sold_out_only)}): "
               f"{', '.join(sold_out_only)}")
     if unseen:
-        print(f"Watched but found nowhere ({len(unseen)}): {', '.join(unseen)}")
+        print(f"{unseen_title} ({len(unseen)}): {', '.join(unseen)}")
     misses = near_misses(unseen, near_corpus)
     if misses:
         print(f"Alias near-misses ({len(misses)}): {'; '.join(misses)}")
