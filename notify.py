@@ -8,10 +8,12 @@ of them is not distinguishable from a broken one from the inbox, so after
 RECAP_DAYS of quiet the run sends a recap of what it can currently see.
 """
 import hashlib
+import html as html_escape
 import json
 import os
 import smtplib
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
@@ -177,11 +179,58 @@ def _stamp_recap(state, now):
     return state
 
 
-def build_digest_body(alerting_hits, notes=None, recap=False, on_demand=False,
-                      tables=None):
+def order_hits(hits):
+    """Strongest news first, by classification.
+
+    Shared by the body, the HTML part and the subject line so all three lead
+    with the same hit -- a subject naming one wine and a body opening with
+    another reads as two different runs.
+    """
     ordered = []
     for section in SECTION_ORDER:
-        ordered.extend(h for h in alerting_hits if h.get("classification") == section)
+        ordered.extend(h for h in hits if h.get("classification") == section)
+    return ordered
+
+
+def _shorten(text, limit):
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _plural(n, word):
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def subject_for(base, hits):
+    """Put the news in the subject line, and put it first.
+
+    A constant subject makes every run look alike in the inbox, so triage
+    means opening the mail. The news leads because a phone shows roughly the
+    first 35 characters of a subject and nothing more: with the kind in front,
+    "Wine tracker digest: 3 deals -" fills that on its own and the wine never
+    appears. The kind still travels, at the end, where the three sorts of mail
+    stay distinguishable without spending the space that matters.
+
+    An empty forced report says "nothing matched" outright -- that mail exists
+    precisely so silence cannot be mistaken for a delivery failure.
+    """
+    if not hits:
+        return f"nothing matched · {base}"
+    lead = order_hits(hits)[0]
+    deals = sum(1 for h in hits if h.get("classification") == "DEAL")
+    head = _plural(deals, "deal") if deals else _plural(len(hits), "hit")
+    wine = " ".join(x for x in (
+        lead.get("producer", ""),
+        _shorten(lead.get("cuvee") or lead.get("title") or "", 30),
+    ) if x)
+    price = f" EUR {lead['price']:.0f}" if lead.get("price") is not None else ""
+    rest = f" +{len(hits) - 1} more" if len(hits) > 1 else ""
+    return f"{head} — {wine}{price}{rest} · {base}"
+
+
+def build_digest_body(alerting_hits, notes=None, recap=False, on_demand=False,
+                      tables=None):
+    ordered = order_hits(alerting_hits)
     shown = ordered[:EMAIL_ROW_CAP]
 
     lines = []
@@ -238,11 +287,131 @@ def build_digest_body(alerting_hits, notes=None, recap=False, on_demand=False,
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _esc(text):
+    return html_escape.escape(str(text or ""))
+
+
+# Inline styles only, and no image, script or webfont. Mail clients strip
+# <style> blocks unpredictably and remote content is what puts a new sender in
+# a junk folder -- which this project has already spent an evening escaping.
+_H = {
+    "wrap": "font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#241c22;max-width:640px",
+    "lede": "margin:0 0 18px;color:#6b5f66;font-size:14px",
+    "sect": "margin:22px 0 8px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#8c2f4a",
+    "row": "padding:10px 0;border-top:1px solid #ddd5dc",
+    "name": "font-weight:600;font-size:15px;color:#241c22;text-decoration:none",
+    "meta": "margin:3px 0 0;font-size:13px;color:#6b5f66",
+    "note": "margin:2px 0 0;font-size:12px;color:#918790",
+    "pre": "font:12px/1.45 ui-monospace,Menlo,Consolas,monospace;background:#f2eff2;padding:10px;overflow-x:auto;white-space:pre",
+    "foot": "margin-top:26px;padding-top:10px;border-top:1px solid #ddd5dc;font-size:12px;color:#918790",
+}
+
+
+def _hit_html(hit):
+    """One hit as a block, ordered by the decision it supports.
+
+    The wine is the link, so the URL stops being a column that wraps across
+    four lines on a phone; the price sits next to the reference with the gap
+    already worked out, because subtracting two numbers is not the reader's
+    job.
+    """
+    producer = _esc(hit.get("producer", ""))
+    alias = hit.get("matched_alias")
+    # The alias that fired is the whole diagnosis for a misattribution.
+    label = f"{producer} [{_esc(alias)}]" if alias else producer
+    cuvee = _esc(_shorten(hit.get("cuvee") or hit.get("title") or "", 80))
+    url = _esc(hit.get("url", ""))
+    title = f"{label} — {cuvee}" if cuvee else label
+    head = (f'<a href="{url}" style="{_H["name"]}">{title}</a>'
+            if url else f'<span style="{_H["name"]}">{title}</span>')
+
+    price = hit.get("price")
+    ref = hit.get("expected_price")
+    money = f"EUR {price:.0f}" if price is not None else "price unknown"
+    if price is not None and ref:
+        pct = price / ref - 1
+        money += f" vs EUR {ref:.0f} ref ({pct:+.0%})"
+    elif ref:
+        money += f" vs EUR {ref:.0f} ref"
+    size = _esc(hit.get("size_label") or f"{hit.get('size_ml', 750)}ml")
+    shop = _esc(hit.get("shop", ""))
+    meta = " · ".join(x for x in (_esc(money), size, shop) if x)
+
+    lines = [f'<div style="{_H["row"]}">{head}',
+             f'<p style="{_H["meta"]}">{meta}</p>']
+    basis = hit.get("reference_basis")
+    if basis:
+        lines.append(f'<p style="{_H["note"]}">{_esc(basis)}</p>')
+    if hit.get("caveat"):
+        lines.append(f'<p style="{_H["note"]}">Reference unverified, or size/tier '
+                     f'confidence low — treat with caution.</p>')
+    lines.append("</div>")
+    return "".join(lines)
+
+
+def build_digest_html(alerting_hits, notes=None, recap=False, on_demand=False,
+                      tables=None):
+    """The HTML half of the mail. The plain text half stays authoritative.
+
+    Sent alongside the text part rather than instead of it: a text client
+    still gets the version this project has always sent, and the diagnostics
+    keep their alignment by staying in a <pre>.
+    """
+    ordered = order_hits(alerting_hits)
+    shown = ordered[:EMAIL_ROW_CAP]
+    deals = sum(1 for h in alerting_hits if h.get("classification") == "DEAL")
+
+    out = [f'<div style="{_H["wrap"]}">']
+    if on_demand:
+        lede = ("You asked for this run, so this is everything currently matched, "
+                "new or not. Nothing here has been marked as alerted.")
+    elif recap:
+        lede = (f"Weekly recap: nothing new and nothing more than "
+                f"{PRICE_DROP_THRESHOLD:.0%} cheaper in {RECAP_DAYS} days. "
+                f"Everything currently matched, and confirmation the tracker runs.")
+    else:
+        lede = (f"{deals} deal(s) among {len(alerting_hits)} alert-worthy hit(s).")
+    out.append(f'<p style="{_H["lede"]}">{_esc(lede)}</p>')
+
+    if not shown:
+        out.append(f'<p style="{_H["meta"]}">Nothing matched at all this run. '
+                   f'That is a real answer, not a failure — but if it repeats, '
+                   f'check the coverage table below.</p>')
+
+    for section in SECTION_ORDER:
+        items = [h for h in shown if h.get("classification") == section]
+        if not items:
+            continue
+        heading = "Flagged as overpriced" if section == "HIGH" else section
+        out.append(f'<div style="{_H["sect"]}">{_esc(heading)} ({len(items)})</div>')
+        out.extend(_hit_html(h) for h in items)
+
+    if len(ordered) > EMAIL_ROW_CAP:
+        kind = "matched" if (recap or on_demand) else "alert-worthy"
+        out.append(f'<p style="{_H["note"]}">… {len(ordered) - EMAIL_ROW_CAP} more '
+                   f'{kind} hit(s) omitted; see hits.json in the run artifact.</p>')
+
+    # Diagnostics last and quiet: they are not why the mail was opened, but
+    # they are how a silent failure reaches a person at all.
+    for heading, rows in (tables or {}).items():
+        if rows:
+            out.append(f'<div style="{_H["sect"]}">{_esc(heading)}</div>')
+            out.append(f'<div style="{_H["pre"]}">'
+                       + "\n".join(_esc(r) for r in rows) + "</div>")
+    for heading, names in (notes or {}).items():
+        if names:
+            out.append(f'<p style="{_H["foot"]}"><b>{_esc(heading)}</b> '
+                       f'({len(names)}): {_esc(", ".join(names))}</p>')
+
+    out.append("</div>")
+    return "".join(out)
+
+
 class NotConfigured(Exception):
     """SMTP credentials are missing, so the digest cannot be delivered."""
 
 
-def send_email(body, subject=DIGEST_SUBJECT):
+def send_email(body, subject=DIGEST_SUBJECT, html=None):
     missing = [k for k in ("GMAIL_SENDER", "GMAIL_APP_PASSWORD", "NOTIFY_EMAIL") if not os.environ.get(k)]
     if missing:
         raise NotConfigured(
@@ -260,7 +429,16 @@ def send_email(body, subject=DIGEST_SUBJECT):
     # which is easy to acquire pasting into a secrets box on a phone.
     password = "".join(os.environ["GMAIL_APP_PASSWORD"].split())
     recipient = os.environ["NOTIFY_EMAIL"].strip()
-    msg = MIMEText(body)
+    # multipart/alternative, text part first: the order is the preference
+    # order, so a text-only client shows the plain body this project has
+    # always sent and never a wall of markup. Without an html part the message
+    # stays exactly what it was.
+    if html:
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText(body, "plain"))
+        msg.attach(MIMEText(html, "html"))
+    else:
+        msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = recipient
@@ -314,14 +492,14 @@ def run_digest(all_hits, dry_run=False, state_path=None, hits_path=None,
     reportable = [h for h in all_hits if h.get("alertable") is not False]
 
     if alerting:
-        body = build_digest_body(alerting, notes, tables=tables)
-        subject = DIGEST_SUBJECT
+        shown, kind = alerting, {}
+        subject = subject_for(DIGEST_SUBJECT, alerting)
     elif force:
-        body = build_digest_body(reportable, notes, on_demand=True, tables=tables)
-        subject = ONDEMAND_SUBJECT
+        shown, kind = reportable, {"on_demand": True}
+        subject = subject_for(ONDEMAND_SUBJECT, reportable)
     elif reportable and recap_due(state, now):
-        body = build_digest_body(reportable, notes, recap=True, tables=tables)
-        subject = RECAP_SUBJECT
+        shown, kind = reportable, {"recap": True}
+        subject = subject_for(RECAP_SUBJECT, reportable)
     else:
         # Nothing was alerted, so nothing is being silenced; persisting here
         # just refreshes last_price for future drop comparisons.
@@ -330,13 +508,16 @@ def run_digest(all_hits, dry_run=False, state_path=None, hits_path=None,
         print("No newly alert-worthy hits this run (cooldown or no change) -- silent run is valid.")
         return alerting
 
+    body = build_digest_body(shown, notes, tables=tables, **kind)
+    html = build_digest_html(shown, notes, tables=tables, **kind)
+
     if dry_run:
         print("DRY_RUN=1 set, skipping SMTP send and leaving state untouched.")
         print(f"{subject} would be:\n")
         print(body)
         return alerting
 
-    send_email(body, subject=subject)
+    send_email(body, subject=subject, html=html)
     # The recap clock is reset by whichever email went out, so a digest and a
     # recap can never both fire for the same stretch of quiet.
     save_state(_stamp_recap(updated_state, now), state_path)

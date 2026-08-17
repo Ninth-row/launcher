@@ -316,7 +316,7 @@ class Recorder:
         self.calls = []
         self.fail = fail
 
-    def __call__(self, body, subject=None):
+    def __call__(self, body, subject=None, html=None):
         if self.fail:
             raise notify.NotConfigured("no credentials")
         self.calls.append((subject, body))
@@ -369,8 +369,8 @@ def test_a_recap_is_labelled_and_has_its_own_subject(tmp_path, monkeypatch):
     notify.run_digest([hit], state_path=state_path, hits_path=hits_path)
 
     subject, body = send.calls[0]
-    assert subject == notify.RECAP_SUBJECT
-    assert subject != notify.DIGEST_SUBJECT
+    assert notify.RECAP_SUBJECT in subject
+    assert notify.DIGEST_SUBJECT not in subject
     assert "recap" in body.lower()
 
 
@@ -430,7 +430,7 @@ def test_a_real_digest_also_resets_the_weekly_clock(tmp_path, monkeypatch):
                       state_path=state_path, hits_path=hits_path)
 
     assert len(send.calls) == 1, "a digest and a recap went out for the same run"
-    assert send.calls[0][0] == notify.DIGEST_SUBJECT
+    assert notify.DIGEST_SUBJECT in send.calls[0][0]
     meta = notify.load_state(state_path)[notify.META_KEY]
     assert (datetime.now(timezone.utc) - notify._parse_iso(meta["last_recap_at"])).days == 0
 
@@ -530,7 +530,7 @@ def test_state_that_predates_the_recap_gets_one_promptly(tmp_path, monkeypatch):
     notify.run_digest([hit], state_path=state_path, hits_path=hits_path)
 
     assert len(send.calls) == 1
-    assert send.calls[0][0] == notify.RECAP_SUBJECT
+    assert notify.RECAP_SUBJECT in send.calls[0][0]
 
 
 def test_a_dry_run_with_nothing_to_say_writes_no_state(tmp_path, monkeypatch):
@@ -638,8 +638,9 @@ def test_a_forced_report_says_which_kind_of_email_it_is(tmp_path, monkeypatch):
     notify.run_digest([hit], state_path=state_path, hits_path=hits_path, force=True)
 
     subject, body = send.calls[0]
-    assert subject == notify.ONDEMAND_SUBJECT
-    assert subject not in (notify.DIGEST_SUBJECT, notify.RECAP_SUBJECT)
+    assert notify.ONDEMAND_SUBJECT in subject
+    assert notify.DIGEST_SUBJECT not in subject
+    assert notify.RECAP_SUBJECT not in subject
     assert "asked for" in body.lower() or "on demand" in body.lower()
 
 
@@ -652,7 +653,7 @@ def test_a_forced_run_with_real_news_sends_the_digest_not_two_emails(tmp_path, m
                       hits_path=hits_path, force=True)
 
     assert len(send.calls) == 1
-    assert send.calls[0][0] == notify.DIGEST_SUBJECT
+    assert notify.DIGEST_SUBJECT in send.calls[0][0]
 
 
 def test_a_forced_report_resets_the_weekly_clock(tmp_path, monkeypatch):
@@ -746,3 +747,156 @@ def test_the_digest_still_goes_to_gmail_over_tls(monkeypatch):
     notify.send_email("body", subject="subj")
     assert FakeSMTP.last["host"] == "smtp.gmail.com"
     assert FakeSMTP.last["port"] == 465
+
+
+# --- the HTML part and the subject line ---------------------------------------
+#
+# The mail was plain text with pipe-delimited rows whose last column was the
+# URL, which on a phone wrapped one hit across four unreadable lines; and the
+# subject was a constant, so the inbox could not tell a run with three deals
+# from a run with none. Both halves are covered here, plus the two properties
+# that must survive: the text part is still sent, and it is still first.
+
+def test_the_message_carries_both_a_text_and_an_html_part():
+    """multipart/alternative, text first. A text-only client must still get
+    the plain body this project has always sent, never a wall of markup."""
+    sent = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def login(self, *a): pass
+        def sendmail(self, sender, to, raw): sent["raw"] = raw
+
+    import email as email_mod
+    notify.os.environ.update(GMAIL_SENDER="a@b.test",
+                             GMAIL_APP_PASSWORD="pw", NOTIFY_EMAIL="c@d.test")
+    real = notify.smtplib.SMTP_SSL
+    notify.smtplib.SMTP_SSL = FakeSMTP
+    try:
+        notify.send_email("the plain body", subject="s", html="<p>markup</p>")
+    finally:
+        notify.smtplib.SMTP_SSL = real
+
+    msg = email_mod.message_from_string(sent["raw"])
+    assert msg.get_content_type() == "multipart/alternative"
+    parts = msg.get_payload()
+    assert [p.get_content_type() for p in parts] == ["text/plain", "text/html"], \
+        "text must come first -- the order is the client's preference order"
+    assert "the plain body" in parts[0].get_payload()
+    assert "markup" in parts[1].get_payload()
+
+
+def test_a_message_without_html_stays_a_plain_text_message():
+    """Passing no html must leave the message exactly what it always was."""
+    sent = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def login(self, *a): pass
+        def sendmail(self, sender, to, raw): sent["raw"] = raw
+
+    import email as email_mod
+    notify.os.environ.update(GMAIL_SENDER="a@b.test",
+                             GMAIL_APP_PASSWORD="pw", NOTIFY_EMAIL="c@d.test")
+    real = notify.smtplib.SMTP_SSL
+    notify.smtplib.SMTP_SSL = FakeSMTP
+    try:
+        notify.send_email("just text", subject="s")
+    finally:
+        notify.smtplib.SMTP_SSL = real
+
+    msg = email_mod.message_from_string(sent["raw"])
+    assert msg.get_content_type() == "text/plain"
+    assert not msg.is_multipart()
+
+
+def test_the_subject_names_the_count_and_the_leading_wine():
+    subject = notify.subject_for(notify.DIGEST_SUBJECT,
+                                [make_hit(classification="DEAL")])
+    assert notify.DIGEST_SUBJECT in subject, "the kind must stay readable"
+    assert "1 deal" in subject and "1 deals" not in subject
+    assert "Labet" in subject
+
+
+def test_an_empty_forced_report_says_so_in_the_subject():
+    """The one case where an empty mail is the point: it must not look like a
+    delivery failure from the notification alone."""
+    subject = notify.subject_for(notify.ONDEMAND_SUBJECT, [])
+    assert notify.ONDEMAND_SUBJECT in subject
+    assert "nothing matched" in subject
+
+
+def test_the_subject_leads_with_the_same_hit_the_body_does():
+    """A subject naming one wine and a body opening with another reads as two
+    different runs."""
+    hits = [make_hit(classification="HIGH", producer="Zzz High"),
+            make_hit(classification="DEAL", producer="Aaa Deal")]
+    subject = notify.subject_for(notify.DIGEST_SUBJECT, hits)
+    body = notify.build_digest_body(hits)
+    assert "Aaa Deal" in subject
+    first_row = [l for l in body.splitlines() if "|" in l and "STATUS" not in l][0]
+    assert "Aaa Deal" in first_row
+
+
+def test_the_html_links_the_wine_and_drops_the_url_column():
+    hit = make_hit(classification="DEAL")
+    html = notify.build_digest_html([hit])
+    assert f'href="{hit["url"]}"' in html, "the wine itself must be the link"
+    assert "Labet" in html and "Cotes du Jura Chardonnay" in html
+    # The plain text keeps the URL as a column; the HTML must not repeat it as
+    # bare text, which is what wrapped across four lines on a phone.
+    assert html.count(hit["url"]) == 1
+
+
+def test_the_html_states_the_gap_between_price_and_reference():
+    """Subtracting two numbers is not the reader's job."""
+    html = notify.build_digest_html(
+        [make_hit(classification="DEAL", price=60.0, expected_price=80.0)])
+    assert "EUR 60" in html and "EUR 80" in html
+    assert "-25%" in html, "the gap must be stated, not left to be worked out"
+
+
+def test_the_html_escapes_shop_supplied_text():
+    """Titles come from shop pages, which are untrusted input, and this one
+    goes into an HTML document."""
+    html = notify.build_digest_html(
+        [make_hit(cuvee='Evil <script>alert(1)</script>', classification="DEAL")])
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_the_html_carries_the_diagnostics_too():
+    """Coverage and notes are how a silent failure reaches a person; they must
+    survive into the HTML half, not only the text one."""
+    html = notify.build_digest_html(
+        [make_hit(classification="DEAL")],
+        notes={"Watched but found nowhere": ["Ganevat"]},
+        tables={"Shop coverage": ["shop | ok | 1"]})
+    assert "Watched but found nowhere" in html and "Ganevat" in html
+    assert "Shop coverage" in html and "shop | ok | 1" in html
+
+
+def test_a_silenced_line_stays_out_of_the_html_as_well():
+    """NOALERT rows are kept out of every email body. The HTML part is a new
+    body and must obey the same rule."""
+    sent = {}
+    real = notify.send_email
+    notify.send_email = lambda body, subject=None, html=None: sent.update(
+        body=body, html=html)
+    try:
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            notify.run_digest(
+                [make_hit(classification="DEAL", producer="Shown"),
+                 make_hit(classification="NOALERT", producer="Silenced",
+                          alertable=False)],
+                state_path=d / "seen.json", hits_path=d / "hits.json")
+    finally:
+        notify.send_email = real
+    assert "Shown" in sent["html"]
+    assert "Silenced" not in sent["html"]

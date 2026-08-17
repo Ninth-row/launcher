@@ -128,7 +128,7 @@ def test_a_silenced_line_is_still_recorded_and_reported():
 
 def test_a_silenced_line_reaches_hits_json_but_not_the_email(tmp_path, monkeypatch):
     sent = []
-    monkeypatch.setattr(notify, "send_email", lambda body, subject=None: sent.append(body))
+    monkeypatch.setattr(notify, "send_email", lambda body, subject=None, html=None: sent.append(body))
     hits = [scored("Anne & Jean-François Ganevat Poulprix", 25)]
     notify.run_digest(hits, state_path=tmp_path / "seen.json",
                       hits_path=tmp_path / "hits.json")
@@ -141,7 +141,7 @@ def test_a_silenced_line_does_not_reappear_in_the_weekly_recap(tmp_path, monkeyp
     """The recap lists everything currently matched, which would put the
     silenced line back in the inbox once a week."""
     sent = []
-    monkeypatch.setattr(notify, "send_email", lambda body, subject=None: sent.append(body))
+    monkeypatch.setattr(notify, "send_email", lambda body, subject=None, html=None: sent.append(body))
     hits = [scored("Anne & Jean-François Ganevat Poulprix", 25)]
     state = tmp_path / "seen.json"
     state.write_text('{"_meta": {"last_recap_at": "2020-01-01T00:00:00+00:00"}}')
