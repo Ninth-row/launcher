@@ -17,6 +17,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import inspect
+import types
 import pytest
 import yaml
 
@@ -254,3 +256,51 @@ def test_setup_check_reads_names_not_values():
 def test_region_dropdown_offers_exactly_the_accepted_regions():
     options = set(re.findall(r'<option value="([a-z]+)">', dashboard.region_options()))
     assert options == apply_issue.VALID_REGIONS
+
+
+# --- the page must not carry an identity -------------------------------------
+
+def test_the_repo_slug_is_never_hardcoded():
+    """The owner half of "owner/name" is an identity, and wine.html is
+    world-readable. Written by hand it pins the account into the generated
+    page, into all 190 historical copies of it, and into the URL the page
+    tells you to authorise -- which is how moving the project to a neutral
+    owner turned into a history rewrite rather than a config change."""
+    source = inspect.getsource(dashboard)
+    body = source[source.index("def _repo_slug"):]
+    assert 'REPO = "' not in source, "the slug is assigned a literal"
+    assert "GITHUB_REPOSITORY" in body, "Actions already states the slug; use it"
+
+
+def test_actions_decides_the_slug_when_it_is_running(monkeypatch):
+    """dashboard.yml regenerates the page in Actions on every push to main,
+    so this is the value that actually ships."""
+    monkeypatch.setenv("GITHUB_REPOSITORY", "some-org/some-repo")
+    assert dashboard._repo_slug() == "some-org/some-repo"
+
+
+def test_a_local_run_reads_the_slug_off_the_remote(monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    for url in ("https://github.com/an-org/launcher.git",
+                "https://github.com/an-org/launcher",
+                "git@github.com:an-org/launcher.git"):
+        monkeypatch.setattr(dashboard.subprocess, "run",
+                            lambda *a, **k: types.SimpleNamespace(stdout=url + "\n"))
+        assert dashboard._repo_slug() == "an-org/launcher", url
+
+
+def test_no_remote_gives_a_placeholder_not_someone_elses_repo(monkeypatch):
+    """A fresh clone with no origin must be visibly wrong rather than quietly
+    pointed at whoever generated the file last."""
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.setattr(dashboard.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(stdout=""))
+    assert dashboard._repo_slug() == "OWNER/REPO"
+
+
+def test_the_rendered_page_carries_whatever_slug_it_was_given(monkeypatch):
+    """End to end: the slug reaches both the instructions and the JS island,
+    which are the two places the old literal appeared."""
+    monkeypatch.setattr(dashboard, "REPO", "neutral-org/launcher")
+    page = dashboard.render(*dashboard.collect())
+    assert page.count("neutral-org/launcher") >= 2
