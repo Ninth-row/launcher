@@ -251,9 +251,15 @@ def send_email(body, subject=DIGEST_SUBJECT):
             "The hits are still in hits.json, and nothing has been marked "
             "as alerted, so they will be re-reported on the next run."
         )
-    sender = os.environ["GMAIL_SENDER"]
-    password = os.environ["GMAIL_APP_PASSWORD"]
-    recipient = os.environ["NOTIFY_EMAIL"]
+    sender = os.environ["GMAIL_SENDER"].strip()
+    # Google shows an app password as four groups of four -- "abcd efgh ijkl
+    # mnop" -- and SMTP AUTH sends whatever string it is given, so a password
+    # pasted as displayed fails to authenticate for a reason that looks like a
+    # wrong password. No app password contains a space, so removing whitespace
+    # cannot break a correct one. Same for a stray newline on any of the three,
+    # which is easy to acquire pasting into a secrets box on a phone.
+    password = "".join(os.environ["GMAIL_APP_PASSWORD"].split())
+    recipient = os.environ["NOTIFY_EMAIL"].strip()
     msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"] = sender

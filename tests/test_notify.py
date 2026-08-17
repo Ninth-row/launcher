@@ -684,3 +684,65 @@ def test_a_forced_dry_run_still_sends_nothing(tmp_path, monkeypatch):
 
     assert send.calls == []
     assert notify.load_state(state_path) == state
+
+
+# --- the credentials as a human actually pastes them --------------------------
+
+class FakeSMTP:
+    """Records what was handed to SMTP AUTH, which is the thing that fails."""
+    last = None
+
+    def __init__(self, host, port):
+        FakeSMTP.last = {"host": host, "port": port}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def login(self, user, password):
+        FakeSMTP.last.update(user=user, password=password)
+
+    def sendmail(self, sender, recipients, message):
+        FakeSMTP.last.update(sender=sender, recipients=recipients, message=message)
+
+
+def test_an_app_password_pasted_as_google_displays_it_still_authenticates(monkeypatch):
+    """Google shows app passwords as four groups of four. SMTP AUTH sends
+    whatever string it is given, so pasting it as displayed fails with what
+    looks like a wrong password -- a bad half hour for anyone setting this up
+    on a phone. No app password contains a space, so stripping cannot break a
+    correct one."""
+    monkeypatch.setenv("GMAIL_SENDER", "someone@gmail.com")
+    monkeypatch.setenv("GMAIL_APP_PASSWORD", "abcd efgh ijkl mnop")
+    monkeypatch.setenv("NOTIFY_EMAIL", "someone@example.com")
+    monkeypatch.setattr(notify.smtplib, "SMTP_SSL", FakeSMTP)
+
+    notify.send_email("body", subject="subj")
+    assert FakeSMTP.last["password"] == "abcdefghijklmnop"
+
+
+def test_a_newline_or_stray_space_around_any_credential_is_ignored(monkeypatch):
+    """A secrets box on a phone collects trailing whitespace easily, and an
+    address with a newline in it is not an address."""
+    monkeypatch.setenv("GMAIL_SENDER", "  someone@gmail.com\n")
+    monkeypatch.setenv("GMAIL_APP_PASSWORD", "\nabcdefghijklmnop  ")
+    monkeypatch.setenv("NOTIFY_EMAIL", " someone@example.com\n")
+    monkeypatch.setattr(notify.smtplib, "SMTP_SSL", FakeSMTP)
+
+    notify.send_email("body", subject="subj")
+    assert FakeSMTP.last["user"] == "someone@gmail.com"
+    assert FakeSMTP.last["password"] == "abcdefghijklmnop"
+    assert FakeSMTP.last["recipients"] == ["someone@example.com"]
+
+
+def test_the_digest_still_goes_to_gmail_over_tls(monkeypatch):
+    monkeypatch.setenv("GMAIL_SENDER", "someone@gmail.com")
+    monkeypatch.setenv("GMAIL_APP_PASSWORD", "abcdefghijklmnop")
+    monkeypatch.setenv("NOTIFY_EMAIL", "someone@example.com")
+    monkeypatch.setattr(notify.smtplib, "SMTP_SSL", FakeSMTP)
+
+    notify.send_email("body", subject="subj")
+    assert FakeSMTP.last["host"] == "smtp.gmail.com"
+    assert FakeSMTP.last["port"] == 465
