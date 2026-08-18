@@ -36,8 +36,26 @@ import textnorm
 MIN_BLOCKS = 3
 # How far to climb from a price before giving up on finding a link.
 MAX_CLIMB = 6
+# How far the *grouping* may climb to find the level where cards are
+# siblings. Separate from MAX_CLIMB, which widens a single block.
+GROUP_CLIMB = 4
 
-NON_PRODUCT_HREF = re.compile(r"^(#|javascript:|mailto:|tel:)", re.I)
+# schema.org is vocabulary, not navigation: PrestaShop marks every card's
+# stock with <link itemprop="availability" href="https://schema.org/InStock">,
+# and reading that as a product link made each card look like two products.
+# The climb then stopped below the card, so vinnaturel's twelve products
+# formed six two-member groups -- one short of MIN_BLOCKS -- and the whole
+# grid was invisible. Microdata identifies a thing; it does not link to one.
+NON_PRODUCT_HREF = re.compile(
+    r"^(#|javascript:|mailto:|tel:|https?://schema\.org/)", re.I)
+# Faceted navigation is not merchandise. lacaveduchateau's champagne page
+# offers "Moins de 50 EUR", "51-100 EUR" and "Plus de 100 EUR" as links, and
+# each one is a short element whose whole text is a currency-adjacent number
+# -- a perfect price cell. They parsed as three products priced 50, 100 and
+# 100, which is worse than reading nothing: a filter label carries no bottle,
+# but its number still went into observations.json and moved the reference
+# pool that every DEAL and HIGH verdict is scored against.
+NON_PRODUCT_QUERY = re.compile(r"[?&](price|filter|order|sort)[=\[]", re.I)
 # Links every shop has that are never a product.
 NON_PRODUCT_PATH = re.compile(
     r"/(cart|panier|basket|checkout|account|compte|login|connexion|register|"
@@ -105,7 +123,9 @@ LINK_ATTRS = ("href", "data-url", "data-href", "data-link")
 def _link_target(element):
     for attr in LINK_ATTRS:
         value = (element.get(attr) or "").strip()
-        if value and not NON_PRODUCT_HREF.match(value) and not NON_PRODUCT_PATH.search(value):
+        if (value and not NON_PRODUCT_HREF.match(value)
+                and not NON_PRODUCT_PATH.search(value)
+                and not NON_PRODUCT_QUERY.search(value)):
             return value
     return None
 
@@ -128,6 +148,27 @@ def _product_link(element):
     return None
 
 
+def _describes_one_product(element):
+    """True while this element still covers at most one product.
+
+    Counted in distinct product links, not in prices. A card that shows a
+    struck-through price beside the current one holds *two* prices and one
+    product, and counting prices stopped the climb below the level where the
+    link lives -- so the card never became a block and the whole grid was
+    invisible. Every PrestaShop shop in the list is built that way:
+    cavescarriere parsed 10 prices into 0 products, and vinnaturel's cards
+    each formed their own two-member group, one short of MIN_BLOCKS.
+
+    Stops counting at two, so this stays cheap on a 500KB catalogue.
+    """
+    seen = set()
+    for _, target in _linked_elements(element):
+        seen.add(target)
+        if len(seen) > 1:
+            return False
+    return True
+
+
 def _block_for(node, price_pattern):
     """The widest ancestor that still describes exactly one product.
 
@@ -135,15 +176,22 @@ def _block_for(node, price_pattern):
     enough. A table-based catalogue puts the link and the price in the same
     <td>, so that rule stops at the cell and every product's "parent" is
     its own <tr> -- each group has one member and the grid is never found.
-    Climbing on while the ancestor holds one price stops at the <tr>
-    instead, and all the rows then share the <table> as their parent.
+    Climbing on while the ancestor still covers one product stops at the
+    <tr> instead, and all the rows then share the <table> as their parent.
     """
     current, widest = node, None
     for _ in range(MAX_CLIMB):
         if current.parent is None:
             break
         current = current.parent
-        if len(price_pattern.findall(current.get_text(" ", strip=True))) > 1:
+        # Both must be true to stop. Prices alone was wrong -- a card showing
+        # a struck-through price beside the current one holds two prices and
+        # one product, and stopping there left the climb below the level where
+        # the link lives. Links alone was wrong too: a card legitimately links
+        # the product, its image and its grower, and requiring one distinct
+        # target took cavepurjus from 48 products to none. A grid has both.
+        if (len(price_pattern.findall(current.get_text(" ", strip=True))) > 1
+                and not _describes_one_product(current)):
             break
         if _product_link(current) is not None:
             widest = current
@@ -196,16 +244,31 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
             blocks.append(block)
 
     # Siblings in a listing share a parent; the busiest parent is the grid.
-    by_parent = {}
-    for block in blocks:
-        parent = block.parent
-        if parent is None:
-            continue
-        by_parent.setdefault(id(parent), []).append(block)
+    # Some themes wrap every card in a column or carousel-slide div of its
+    # own, and then no two cards are siblings at all: lacaveduchateau's 25
+    # Magento cards each produced a group of one, so the grid was never
+    # found. Climb the grouping level -- not the block -- until the cards
+    # meet, and stop the moment a level is busy enough. Only ever reached
+    # when the level below returned too little, so it can add a grid where
+    # there was none but cannot replace one that was already found.
+    best = []
+    for level in range(GROUP_CLIMB):
+        by_parent = {}
+        for block in blocks:
+            ancestor = block
+            for _ in range(level + 1):
+                ancestor = ancestor.parent if ancestor is not None else None
+            if ancestor is None:
+                continue
+            by_parent.setdefault(id(ancestor), []).append(block)
+        if not by_parent:
+            break
+        candidate = max(by_parent.values(), key=len)
+        if len(candidate) > len(best):
+            best = candidate
+        if len(best) >= min_blocks:
+            break
 
-    if not by_parent:
-        return []
-    best = max(by_parent.values(), key=len)
     if len(best) < min_blocks:
         return []
 
@@ -251,6 +314,12 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
 # shop's own language, and the filename usually repeats it.
 PDF_LIST_WORDS = ("wijnlijst", "wijnkaart", "wine list", "winelist", "carte",
                   "tarif", "prijslijst", "catalogue", "lijst", "kaart", "liste")
+# ...and documents that say outright they are something else. "Catalogue" is
+# the word a French shop uses for its range and also for its Christmas gift
+# boxes: lacaveduchateau links
+# `La_Cave_du_Chateau_Catalogue_cadeaux_2025.pdf`, which is hampers, not the
+# cellar. Reading it would report gift sets as wines at gift-set prices.
+PDF_NOT_A_LIST_WORDS = ("cadeau", "gift", "geschenk")
 
 
 def find_pdf_link(html, base_url):
@@ -271,6 +340,8 @@ def find_pdf_link(html, base_url):
             continue
         label = _strip_accents(
             f"{anchor.get_text(' ', strip=True)} {anchor.get('title') or ''} {href}")
+        if any(word in label for word in PDF_NOT_A_LIST_WORDS):
+            continue
         named = any(word in label for word in PDF_LIST_WORDS)
         candidates.append((named, urljoin(base_url, href)))
     if not candidates:

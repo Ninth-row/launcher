@@ -856,3 +856,92 @@ def test_a_404_on_page_one_is_still_the_shop_failing():
     crawler_client = FlakyPagedCrawler({})
     with pytest.raises(scraper.crawler.UpstreamError):
         scraper.fetch_html(SHOP, crawler_client)
+
+
+# --- the four shapes that kept real catalogues invisible -----------------------
+#
+# Each of these was live: a shop reporting "ok" in the coverage table while
+# reading a fraction of its range, or none of it.
+
+def test_a_card_with_a_sale_price_is_still_one_product():
+    """PrestaShop shows the old price beside the new one. Counting prices to
+    decide "one product" stopped the climb below the level holding the link,
+    so cavescarriere parsed 10 prices into 0 products and every vinnaturel
+    card formed a two-member group -- one short of MIN_BLOCKS."""
+    card = ('<article class="card"><a href="/wine-{i}">Wine {i}</a>'
+            '<div><span class="old">30,00 €</span>'
+            '<span class="now">21,50 €</span></div></article>')
+    html = "<div class='grid'>" + "".join(card.format(i=i) for i in range(4)) + "</div>"
+    items = find(html)
+    assert len(items) == 4, "a struck-through price must not hide the card"
+    assert {i["url"].rsplit("/", 1)[-1] for i in items} == {f"wine-{i}" for i in range(4)}
+
+
+def test_microdata_availability_is_not_a_product_link():
+    """<link itemprop="availability" href="https://schema.org/InStock"> is
+    vocabulary, not navigation. Read as a product link it made each card look
+    like two products, and the climb stopped below the card."""
+    card = ('<li class="card"><link itemprop="availability" '
+            'href="https://schema.org/InStock"/>'
+            '<a href="/wine-{i}">Wine {i}</a>'
+            '<div><span>30,00 €</span><span>21,50 €</span></div></li>')
+    html = "<ul class='grid'>" + "".join(card.format(i=i) for i in range(4)) + "</ul>"
+    assert len(find(html)) == 4
+    assert autoselect._link_target(
+        _tag('<link href="https://schema.org/InStock"/>')) is None
+
+
+def _tag(markup):
+    from bs4 import BeautifulSoup
+    return BeautifulSoup(markup, "html.parser").find(True)
+
+
+def test_a_price_filter_is_not_a_product():
+    """lacaveduchateau offers "Moins de 50€", "51-100€" and "Plus de 100€" as
+    links. Each is a short element whose whole text is a currency-adjacent
+    number -- a perfect price cell -- so they parsed as three products priced
+    50, 100 and 100 and went into the observed reference pool."""
+    html = """
+    <div class="facets">
+      <a href="/champagnes.html?price=22-50"><span>Moins de 50 €</span></a>
+      <a href="/champagnes.html?price=51-100"><span>51-100 €</span></a>
+      <a href="/champagnes.html?price=101-400"><span>Plus de 100 €</span></a>
+    </div>"""
+    assert find(html) == [], "a filter label carries no bottle"
+
+
+def test_cards_wrapped_one_per_column_still_form_a_grid():
+    """Magento wraps every card in a column div of its own, so no two cards
+    are siblings and each formed a group of one: lacaveduchateau's 25 cards
+    read as nothing at all."""
+    # The filler divs matter: they push the price far enough from the card
+    # that MAX_CLIMB is spent before the climb reaches the shared grid, so
+    # the widest block is the card's own wrapper and every card's parent is
+    # a different column. That is the real lacaveduchateau shape; a shallower
+    # one groups correctly by accident and proves nothing.
+    card = ('<div class="col"><div class="slide"><form class="card">'
+            '<a href="/wine-{i}">Wine {i}</a>'
+            '<div><div><div><div><span>21,50 €</span></div></div></div></div>'
+            '</form></div></div>')
+    html = "<div class='grid'>" + "".join(card.format(i=i) for i in range(5)) + "</div>"
+    items = find(html)
+    assert len(items) == 5
+    assert len({i["url"] for i in items}) == 5, "each column is a separate wine"
+
+
+def test_a_gift_catalogue_is_not_the_wine_list():
+    """"Catalogue" is what a French shop calls its range and also its
+    Christmas hampers. lacaveduchateau links
+    La_Cave_du_Chateau_Catalogue_cadeaux_2025.pdf, and reading it would
+    report gift sets as wines at gift-set prices."""
+    html = ('<a href="/docs/La_Cave_du_Chateau_Catalogue_cadeaux_2025.pdf">'
+            'Catalogue cadeaux</a>')
+    assert autoselect.find_pdf_link(html, "https://shop.test") is None
+
+
+def test_a_real_wine_list_pdf_is_still_found():
+    """The exclusion must not cost the two shops whose catalogue *is* a
+    document."""
+    html = '<a href="/files/wijnlijst_winkel_257.pdf">Wijnlijst</a>'
+    assert autoselect.find_pdf_link(html, "https://shop.test").endswith(
+        "wijnlijst_winkel_257.pdf")
