@@ -494,6 +494,16 @@ HTTP header or printed.
   even when the list is empty -- that empty table is the only way to tell
   "nothing new" from "credentials expired" from a button. It marks nothing
   as alerted, exactly like the recap, and `DRY_RUN` still overrides it.
+- The row cap must never silence a hit it did not show. An email carries at
+  most `EMAIL_ROW_CAP` rows, and marking an item alerted is what silences it
+  for 30 days: one live run had 79 alert-worthy hits, printed 40 and marked
+  all 79, so 39 real finds reached nobody and then went quiet for a month with
+  only the `hits.json` artifact as evidence. The overflow is held back
+  unmarked (`_hold_back`) and leads the next digest, and the note says how
+  many. Restore the *whole* previous entry when holding one back -- a
+  half-entry with `last_price` but no `last_alerted_at` is not new, is past no
+  cooldown, and can only ever re-alert by becoming a `DEAL`, which loses a
+  held-back `FAIR` for good.
 - `notify.py` persists `seen.json` only *after* the email is actually sent.
   Marking an item alerted is what silences it for 30 days, so saving before
   the send means a dry run or a failed send silently swallows a real find.

@@ -289,6 +289,94 @@ def test_successful_send_does_mark_the_item_alerted(tmp_path, monkeypatch):
     assert second == [], "an delivered alert must go into cooldown"
 
 
+def _many_hits(count):
+    """`count` distinct alert-worthy hits, all new, all the same shape."""
+    return [make_hit(classification="FAIR", price=50.0 + i,
+                     title=f"Domaine Labet Cuvee {i}",
+                     url=f"https://example-shop.test/products/labet-{i}")
+            for i in range(count)]
+
+
+def test_hits_beyond_the_row_cap_are_not_marked_alerted(tmp_path, monkeypatch):
+    """The cap must not silence what it does not show.
+
+    A live run had 79 alert-worthy hits, printed 40 and marked all 79. The
+    other 39 were real finds that no email ever carried and that seen.json
+    then kept quiet for 30 days.
+    """
+    state_path, hits_path = tmp_path / "seen.json", tmp_path / "hits.json"
+    hits = _many_hits(notify.EMAIL_ROW_CAP + 6)
+    monkeypatch.setattr(notify, "send_email", lambda body, **kw: None)
+
+    alerting = notify.run_digest(hits, state_path=state_path,
+                                 hits_path=hits_path)
+
+    assert len(alerting) == notify.EMAIL_ROW_CAP
+    state = notify.load_state(state_path)
+    shown = {notify.item_key(h) for h in alerting}
+    held = [h for h in hits if notify.item_key(h) not in shown]
+    assert len(held) == 6
+    for hit in held:
+        assert notify.item_key(hit) not in state, \
+            "a hit the email never showed must stay unmarked, not half-marked"
+
+
+def test_the_held_back_hits_lead_the_next_digest(tmp_path, monkeypatch):
+    state_path, hits_path = tmp_path / "seen.json", tmp_path / "hits.json"
+    hits = _many_hits(notify.EMAIL_ROW_CAP + 6)
+    monkeypatch.setattr(notify, "send_email", lambda body, **kw: None)
+
+    first = notify.run_digest(hits, state_path=state_path, hits_path=hits_path)
+    second = notify.run_digest(hits, state_path=state_path, hits_path=hits_path)
+
+    assert len(second) == 6
+    assert {notify.item_key(h) for h in second}.isdisjoint(
+        {notify.item_key(h) for h in first})
+
+
+def test_the_digest_says_how_many_it_held_back(tmp_path, monkeypatch):
+    state_path, hits_path = tmp_path / "seen.json", tmp_path / "hits.json"
+    sent = {}
+    monkeypatch.setattr(notify, "send_email",
+                        lambda body, **kw: sent.update(body=body, **kw))
+
+    notify.run_digest(_many_hits(notify.EMAIL_ROW_CAP + 6),
+                      state_path=state_path, hits_path=hits_path)
+
+    assert "Held for the next digest" in sent["body"]
+    assert "6 further new hit(s)" in sent["body"]
+    assert "6 further new hit(s)" in sent["html"]
+
+
+def test_holding_back_a_previously_alerted_hit_restores_its_old_entry(tmp_path,
+                                                                     monkeypatch):
+    """Not every held hit is new -- one can be re-alerting on a price drop.
+
+    Restoring its previous entry leaves the old alert stamp in place, so it
+    re-alerts on the same drop next run instead of being recorded as reported.
+    """
+    state_path, hits_path = tmp_path / "seen.json", tmp_path / "hits.json"
+    monkeypatch.setattr(notify, "send_email", lambda body, **kw: None)
+
+    # One older hit, alerted a while ago at a high price, now much cheaper --
+    # a drop, so it alerts again. It is ordered last by being the only NOREF.
+    dropped = make_hit(classification="NOREF", price=40.0,
+                       expected_price=None,
+                       url="https://example-shop.test/products/dropped")
+    before = {notify.item_key(dropped): {
+        "last_price": 100.0, "last_alerted_price": 100.0,
+        "last_alerted_at": (datetime.now(timezone.utc)
+                            - timedelta(days=2)).isoformat(),
+        "last_classification": "NOREF"}}
+    state_path.write_text(json.dumps(before))
+
+    notify.run_digest(_many_hits(notify.EMAIL_ROW_CAP) + [dropped],
+                      state_path=state_path, hits_path=hits_path)
+
+    after = notify.load_state(state_path)
+    assert after[notify.item_key(dropped)] == before[notify.item_key(dropped)]
+
+
 def test_missing_credentials_raise_a_legible_error(monkeypatch):
     for key in ("GMAIL_SENDER", "GMAIL_APP_PASSWORD", "NOTIFY_EMAIL"):
         monkeypatch.delenv(key, raising=False)

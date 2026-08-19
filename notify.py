@@ -125,6 +125,30 @@ def _update_state(state, hit, key, alerted, now):
     return state
 
 
+def _hold_back(updated, previous, held):
+    """Undo the alert mark for hits the email is not going to show.
+
+    Marking an item alerted is what silences it for 30 days, and the body is
+    capped at EMAIL_ROW_CAP rows. One live run had 79 alert-worthy hits: 40
+    were printed, all 79 were marked, and the other 39 -- real finds, never
+    shown to anyone -- went quiet for a month with only the hits.json
+    artifact to show they had ever existed.
+
+    The previous entry is restored wholesale, including deleting a key that
+    was not there before. Leaving a half-entry behind is worse than either:
+    with a `last_price` but no `last_alerted_at` the hit is no longer new, is
+    past no cooldown, and can only re-alert by turning into a DEAL -- so a
+    held-back FAIR or NOREF would never be reported at all.
+    """
+    for hit in held:
+        key = item_key(hit)
+        if key in previous:
+            updated[key] = previous[key]
+        else:
+            updated.pop(key, None)
+    return updated
+
+
 def select_alerts(hits, state=None, now=None):
     """Decide which hits are alert-worthy this run, and return the updated
     state. last_price is refreshed for every hit seen, alerted or not, so
@@ -492,6 +516,19 @@ def run_digest(all_hits, dry_run=False, state_path=None, hits_path=None,
     reportable = [h for h in all_hits if h.get("alertable") is not False]
 
     if alerting:
+        # The cap silences what it does not show unless the overflow is held
+        # back, so the digest reports the first EMAIL_ROW_CAP in news order
+        # and the rest stay unmarked -- they lead the next digest instead of
+        # disappearing for 30 days.
+        ordered = order_hits(alerting)
+        alerting, held = ordered[:EMAIL_ROW_CAP], ordered[EMAIL_ROW_CAP:]
+        if held:
+            updated_state = _hold_back(updated_state, state, held)
+            notes = dict(notes or {})
+            notes["Held for the next digest"] = [
+                f"{len(held)} further new hit(s), in hits.json now: an email "
+                f"shows at most {EMAIL_ROW_CAP} rows and nothing is marked as "
+                f"alerted unless it was shown"]
         shown, kind = alerting, {}
         subject = subject_for(DIGEST_SUBJECT, alerting)
     elif force:
