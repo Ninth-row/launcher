@@ -536,6 +536,35 @@ def test_a_price_filter_beside_a_real_grid_is_dropped_and_the_grid_kept():
 
 # --- every hit must be nameable ----------------------------------------------
 
+def test_a_region_badge_inside_the_link_is_not_the_wine_name():
+    """lacaveduchateau's real markup: the product link's text is the region
+    and the img alt is the bottle. Seventeen rows a run were named "Corse",
+    "Loire", "Bourgogne" -- in a digest that is not a wine at all."""
+    html = ('<html><body><div class="grid">'
+            '<div><a href="/li-tara-di-sognu-2024-rouge.html">Corse'
+            '<img alt="Clos Canarelli, Tara Di Sognu 2024 Rouge 75cl"/></a>'
+            '<span>65,00 &euro;</span></div>'
+            '<div><a href="/on-p-tit-max-2024-rouge.html">Beaujolais'
+            '<img alt="Guy Breton, P&#39;tit Max 2024 Rouge 75cl"/></a>'
+            '<span>35,00 &euro;</span></div>'
+            '<div><a href="/e-de-vaccelli-unu-2025-rose.html">Corse'
+            '<img alt="Domaine de Vaccelli, Unu 2025 Ros&eacute; 75cl"/></a>'
+            '<span>19,00 &euro;</span></div>'
+            '</div></body></html>')
+    titles = [i["title"] for i in find(html)]
+    assert titles[0] == "Clos Canarelli, Tara Di Sognu 2024 Rouge 75cl"
+    assert not any(t in ("Corse", "Beaujolais") for t in titles)
+
+
+def test_a_one_word_name_is_still_used_when_it_is_all_there_is():
+    """The rule prefers something longer, it does not require one."""
+    html = ('<html><body><div class="grid">'
+            + "".join(f'<div><a href="/vin-{i}" title="Poulsard"></a>'
+                      f'<span>29,00 &euro;</span></div>' for i in range(3))
+            + '</div></body></html>')
+    assert all(i["title"] == "Poulsard" for i in find(html))
+
+
 def test_a_card_with_only_an_image_and_a_price_still_gets_a_name():
     """vinovivo parsed products whose titles were all empty, and an
     untitled hit is unreadable in a digest. The product URL spells the wine

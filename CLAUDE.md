@@ -330,6 +330,11 @@ HTTP header or printed.
   label word is the whole of it: "prices and nothing else" also describes a
   card that is an image and a price with the wine named only in its href,
   which is how vinovivo's grid read, and a test keeps that markup.
+- A one-word title is a badge, not a wine. lacaveduchateau puts the region
+  inside the product link, so `_title_for` named seventeen rows a run
+  "Corse", "Loire" or "Bourgogne" while the img alt read "Clos Canarelli,
+  Tara Di Sognu 2024 Rouge 75cl". A candidate of one word is taken only when
+  nothing longer is offered -- a bottle is at least a grower and a cuvee.
 - A zero is not a price. Cart widgets ("Voir mon panier -- 0,00 EUR"), gift
   cards and "price on request" all carry a currency-adjacent zero, and zero
   is below every reference there will ever be, so such a row is a permanent

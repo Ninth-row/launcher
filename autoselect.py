@@ -213,17 +213,31 @@ def _title_from_url(url):
 
 
 def _title_for(block, anchor):
-    for candidate in (
+    """The wine's name, preferring a candidate that reads like one.
+
+    Order alone is not enough. lacaveduchateau puts a region badge inside
+    the product link -- the anchor's text is "Corse", "Loire", "Bourgogne" --
+    while the img alt spells the bottle out as "Clos Canarelli, Tara Di Sognu
+    2024 Rouge 75cl". Seventeen rows a run were named after a region, which
+    in a digest is not a wine at all.
+
+    So a one-word candidate is taken only when nothing longer is offered: a
+    bottle is at least a grower and a cuvee, a badge is one word.
+    """
+    candidates = [
         anchor.get("title"),
         anchor.get("aria-label"),
         block.find(["h1", "h2", "h3", "h4"]).get_text(" ", strip=True)
         if block.find(["h1", "h2", "h3", "h4"]) else None,
         anchor.get_text(" ", strip=True),
         (block.find("img") or {}).get("alt") if block.find("img") else None,
-    ):
-        if candidate and candidate.strip():
-            return re.sub(r"\s{2,}", " ", candidate.strip())
-    return ""
+    ]
+    candidates = [re.sub(r"\s{2,}", " ", c.strip())
+                  for c in candidates if c and c.strip()]
+    for candidate in candidates:
+        if len(candidate.split()) > 1:
+            return candidate
+    return candidates[0] if candidates else ""
 
 
 # A grower's page legitimately lists one or two bottles -- Labet's has two,
