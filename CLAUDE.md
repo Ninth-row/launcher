@@ -475,6 +475,16 @@ HTTP header or printed.
   because "pierre" and "calice" are French before they are estates.
   Loosening any of it turns the note into noise, and a noisy note is an
   ignored note.
+- When a bare surname is genuinely needed, the namesake carries the
+  distinction. `NAMESAKES` is matched exactly like `PRODUCERS` and then
+  discarded, so a longer namesake alias takes the bottle away from the estate
+  we watch and reports nothing. "Labet" cannot become "domaine labet" --
+  mareehaute writes real Jura cuvees as "Chercheurs d'or 2009 Labet" -- while
+  caves-carriere carries LABET PIERRE, LABET FRANCOIS and a "Clos-Vougeot
+  Grand Cru ROUMIER LAURENT 2021", none of them ours. It is defined **above**
+  `PRODUCERS`: `apply_issue.py` finds the end of that dict by the "Shops to
+  check" banner, so a dict in between silently swallows every producer the
+  issue form adds, as a name that is matched and then dropped.
 - Producer aliases must name an estate, not a surname. `match_producers`
   prefers the longest matching alias, but that only separates producers we
   track -- it cannot help against an untracked namesake. Jura and Savoie

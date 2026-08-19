@@ -503,6 +503,46 @@ def test_the_pupillin_estate_still_matches_however_it_is_written(title):
     assert scraper.match_producers(title) == ["Overnoy/Houillon"]
 
 
+# Real listings, from caves-carriere's own grower index and a captured
+# product title. Christophe runs Domaine Georges Roumier; Laurent and Herve
+# Roumier are separate estates, and Pierre and Francois Labet are a Burgundy
+# family unrelated to the Jura Domaine Labet.
+NAMESAKE_LISTINGS = [
+    ("Clos-Vougeot Grand Cru ROUMIER LAURENT 2021 Rouge 75cl", "Roumier"),
+    ("ROUMIER LAURENT", "Roumier"),
+    ("LABET PIERRE", "Labet"),
+    ("LABET FRANCOIS", "Labet"),
+    ("Pierre Labet Beaune Clos du Dessus des Marconnets 2021", "Labet"),
+]
+
+
+@pytest.mark.parametrize("title,not_this", NAMESAKE_LISTINGS)
+def test_a_namesake_is_not_reported_as_the_estate_we_watch(title, not_this):
+    """A bare surname is kept where the shops need it, so the namesake is
+    what carries the distinction. A Bourgogne at EUR 20 scored against a Jura
+    reference is a false DEAL, not merely a wrong label."""
+    assert not_this not in scraper.match_producers(title)
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("Chercheurs d'or 2009 Labet", "Labet"),
+    ("vin jaune 2018 Domaine Labet", "Labet"),
+    ("Labet alain - Jura Bugey Savoie", "Labet"),
+    ("Famille Labet Cotes du Jura", "Labet"),
+    ("Bonnes-Mares Grand Cru ROUMIER CHRISTOPHE 2019", "Roumier"),
+    ("Chambolle-Musigny ROUMIER GEORGES 2020", "Roumier"),
+])
+def test_the_estate_we_watch_still_matches_however_it_is_written(title, expected):
+    """Every one of these is a real listing too. The namesakes must not cost
+    us the bottles the bare surname exists to catch."""
+    assert expected in scraper.match_producers(title)
+
+
+def test_a_namesake_is_never_reported_as_a_producer_of_its_own():
+    assert scraper.match_producers("LABET PIERRE Beaune 2021") == []
+    assert not set(scraper.NAMESAKES) & set(scraper.PRODUCERS)
+
+
 def test_bruyere_houillon_is_its_own_estate():
     assert scraper.match_producers("Bruyère houillon Savagnin") == ["Bruyere Houillon"]
 

@@ -292,6 +292,32 @@ def producers_of(src):
     return ns["PRODUCERS"]
 
 
+def dict_named(src, name):
+    tree = ast.parse(src)
+    node = next(
+        n for n in tree.body
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", None) == name
+    )
+    ns = {}
+    exec(compile(ast.Module([node], []), "<t>", "exec"), ns)
+    return ns[name]
+
+
+def test_a_new_producer_lands_in_producers_and_not_in_namesakes(scraper_src, book):
+    """The end of the PRODUCERS dict is found by the banner that follows it,
+    so any dict added between the two collects everything the form submits.
+    NAMESAKES was written below PRODUCERS first and did exactly that: every
+    producer added through the dashboard would have become a name that is
+    matched and then discarded, which is silence, not an error."""
+    body = body_with(ISSUE_20_BODY, "Producer name", "Zzz Seam Domaine")
+    new_src, _, _ = apply_issue.handle_producer(
+        apply_issue.parse_form(body), scraper_src, copy.deepcopy(book)
+    )
+
+    assert "Zzz Seam Domaine" in dict_named(new_src, "PRODUCERS")
+    assert dict_named(new_src, "NAMESAKES") == dict_named(scraper_src, "NAMESAKES")
+
+
 # --- upsert: partial updates leave other fields alone ------------------------
 
 def test_update_price_only_keeps_aliases_and_region(scraper_src, book):

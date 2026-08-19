@@ -124,6 +124,34 @@ WOO_PAGE_SIZE = 100
 MAX_PAGES_PER_SHOP = 150
 
 # ---------------------------------------------------------------------------
+# Estates that share a surname with a producer above and are NOT wanted.
+# Matched exactly like PRODUCERS and then discarded: a namesake's only job is
+# to be the longer alias, so `matched_aliases`' existing rule -- an alias
+# contained in another producer's matching alias loses -- routes the bottle
+# away from the estate we watch and then drops it entirely.
+#
+# Defined above PRODUCERS, not below: apply_issue.py locates the end of the
+# PRODUCERS dict by the "Shops to check" banner that follows it, so a dict
+# sitting in between silently collects every producer the issue form adds --
+# as a namesake, which is to say into a list of names that never report.
+# tests/test_apply_issue.py caught exactly that on the first run.
+#
+# This is what a bare surname needs when the surname is genuinely needed.
+# "Labet" cannot become "domaine labet": mareehaute writes real Jura cuvees
+# as "Chercheurs d'or 2009 Labet". But caves-carriere carries LABET PIERRE
+# and LABET FRANCOIS (Beaune and Clos de Vougeot, another family entirely)
+# and a "Clos-Vougeot Grand Cru ROUMIER LAURENT 2021" -- Laurent Roumier is
+# not Christophe's Domaine Georges Roumier. Every one of those was being
+# reported under the wrong producer, and a Bourgogne at EUR 20 scored against
+# a Jura reference is a false DEAL, not merely a wrong label.
+NAMESAKES = {
+    "not-ours: Pierre Labet": ["labet pierre", "pierre labet"],
+    "not-ours: Francois Labet": ["labet francois", "francois labet"],
+    "not-ours: Laurent Roumier": ["roumier laurent", "laurent roumier"],
+    "not-ours: Herve Roumier": ["roumier herve", "herve roumier"],
+}
+
+# ---------------------------------------------------------------------------
 # Producers to watch for. Each canonical name maps to alias substrings that
 # are matched accent- and case-insensitively (see normalize()). A domaine
 # known by more than one name (e.g. Overnoy is run by Houillon) lists both.
@@ -534,14 +562,17 @@ def matched_aliases(text):
     """
     norm = match_key(text)
     matched = {}
-    for canonical, aliases in PRODUCERS.items():
+    for canonical, aliases in {**PRODUCERS, **NAMESAKES}.items():
         hits = [match_key(a) for a in aliases if match_key(a) in norm]
         if hits:
             matched[canonical] = max(hits, key=len)
 
     return {
         canonical: alias for canonical, alias in matched.items()
-        if not any(other is not alias and alias in other for other in matched.values())
+        # A namesake competes for the bottle and then takes it away with it:
+        # it is here to be the longer alias, never to be reported.
+        if canonical not in NAMESAKES
+        and not any(other is not alias and alias in other for other in matched.values())
     }
 
 
