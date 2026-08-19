@@ -1066,6 +1066,9 @@ def _walk_pages(shop, crawler_client, start, pages_left, seen_urls):
     once.
     """
     items, visited, page_url, how = [], {start}, start, None
+    # Product URLs seen by *this* walk. Separate from the shared seen_urls on
+    # purpose: see the two-question comment below.
+    walk_seen = set()
     first_html, truncated, fetched = "", False, 0
     stated_pages = None
 
@@ -1109,9 +1112,25 @@ def _walk_pages(shop, crawler_client, start, pages_left, seen_urls):
                     print(f"[{shop['name']}] {start} states {size[0]} product(s) "
                           f"over {size[2]} page(s)")
         page_items, how = _parse_html_page(shop, resp.text, page_url)
-        fresh = [i for i in page_items if i["url"] not in seen_urls]
-        if not fresh:
+        # Two different questions, and conflating them abandoned catalogues
+        # half-read. "Is there anything new on this page" was asked against
+        # the set shared by every catalogue, so it answered no whenever two
+        # categories overlap -- and winenot's six overlap by construction, a
+        # moelleux white being in `blanc` as well. One such page ended the
+        # walk with 20-odd pages unread, and because this break sets no
+        # truncated flag the coverage row still said ok. `catalogue_starts`
+        # rotates the categories hourly, so which one got cut moved with the
+        # clock and a wine could be found one run and gone the next.
+        #
+        # Stopping is for a pager that has looped, which repeats URLs *this*
+        # walk already read. Cross-category overlap means only that there is
+        # nothing here to add.
+        if not page_items:
             break
+        if all(i["url"] in walk_seen for i in page_items):
+            break
+        walk_seen.update(i["url"] for i in page_items)
+        fresh = [i for i in page_items if i["url"] not in seen_urls]
         seen_urls.update(i["url"] for i in fresh)
         items.extend(fresh)
 

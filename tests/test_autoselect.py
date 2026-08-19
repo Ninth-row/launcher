@@ -1020,3 +1020,70 @@ def test_a_shop_without_a_producer_index_fetches_no_extra_page():
 
 def find_at(html, base):
     return autoselect.find_products(html, base, PRICE, PARSE)
+
+
+# --- overlapping categories must not truncate each other ----------------------
+
+def _page(ids, next_url=None):
+    cards = "".join(
+        f'<div class="card"><a href="/wine-{i}">Wine {i}</a>'
+        f'<span>21,50 €</span></div>' for i in ids)
+    nxt = f'<a rel="next" href="{next_url}">next</a>' if next_url else ""
+    return f'<div class="grid">{cards}</div>{nxt}'
+
+
+class TwoCategories:
+    """Two catalogues that share their first page of wines."""
+
+    def __init__(self):
+        self.urls = []
+
+    def get(self, url, params=None):
+        self.urls.append(url)
+        pages = {
+            # First category: wines 1-3, then 4-6.
+            "https://shop.test/a": _page([1, 2, 3], "https://shop.test/a?p=2"),
+            "https://shop.test/a?p=2": _page([4, 5, 6]),
+            # Second category repeats 1-3 on its first page, and its own wines
+            # only appear on page two.
+            "https://shop.test/b": _page([1, 2, 3], "https://shop.test/b?p=2"),
+            "https://shop.test/b?p=2": _page([7, 8, 9]),
+        }
+        return scraper.crawler.FetchResult(200, pages.get(url, ""))
+
+
+OVERLAPPING = {
+    "name": "overlap-shop", "platform": "html", "url": "https://shop.test",
+    "catalog_paths": ["a", "b"],
+    "item_selector": "div.nope", "title_selector": "h2.nope",
+    "price_selector": "span.nope", "verified": True,
+}
+
+
+def test_a_category_sharing_a_page_with_another_is_still_read_to_the_end():
+    """"Nothing new on this page" was asked against the set shared by every
+    catalogue, so it answered no wherever two categories overlap -- and then
+    broke, abandoning the rest of that catalogue. winenot's six type
+    categories overlap by construction: a moelleux white is in `blanc` too."""
+    client = TwoCategories()
+    items = scraper.fetch_html(OVERLAPPING, client)
+    urls = {i["url"].rsplit("/", 1)[-1] for i in items}
+    assert "wine-7" in urls and "wine-9" in urls, (
+        "the second category stopped on its overlapping first page and its own "
+        f"wines were never read; got {sorted(urls)}"
+    )
+    assert len(urls) == 9, f"expected all nine wines once each, got {sorted(urls)}"
+
+
+def test_a_pager_that_loops_still_stops():
+    """The break exists for a pager that serves the same page for ever. That
+    must keep working: the fix narrows it to repeats within one walk."""
+    class Looping:
+        def get(self, url, params=None):
+            # Always the same three wines, always offering a "next".
+            return scraper.crawler.FetchResult(
+                200, _page([1, 2, 3], "https://shop.test/a?p=99"))
+
+    shop = dict(OVERLAPPING, catalog_paths=["a"])
+    items = scraper.fetch_html(shop, Looping())
+    assert len(items) == 3, f"a looping pager was followed round, got {len(items)}"
