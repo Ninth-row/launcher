@@ -342,6 +342,60 @@ def report(results):
     return lines
 
 
+def explain(url, crawler_client, find=None):
+    """What the parser sees at one URL, line by line.
+
+    Three separate questions this session ended in "I cannot see that page":
+    a wine the shop lists but the run never returned, a grower page that came
+    back empty, a category that might not be a category. Each needed the same
+    handful of facts, and guessing at them from a truncated capture was wrong
+    at least once. This prints them.
+    """
+    lines = [f"--- {url}"]
+    try:
+        page = crawler_client.get(url)
+        page.raise_for_status()
+    except Exception as e:
+        lines.append(f"    unreachable: {type(e).__name__}: {_redact(str(e))}")
+        return lines
+
+    html = page.text
+    soup = BeautifulSoup(html, "html.parser")
+    nodes = autoselect._price_nodes(soup, scraper.PRICE_PATTERN)
+    items = autoselect.find_products(
+        html, url, scraper.PRICE_PATTERN, scraper.parse_price)
+    # Counted on the rendered text, not the raw markup: a shop that writes
+    # &euro; or &#8364; has a price on the page and none in its source, and
+    # reporting zero there is how a readable page reads as an empty one.
+    text = soup.get_text(" ", strip=True)
+    lines.append(
+        f"    {len(html)} bytes, {len(scraper.PRICE_PATTERN.findall(text))} "
+        f"currency-adjacent price(s), {len(nodes)} price cell(s), "
+        f"{len(items)} product(s) parsed")
+    size = autoselect.catalogue_size(html)
+    if size:
+        lines.append(f"    states a catalogue of {size}")
+    nxt = autoselect.find_next_page(html, url)
+    lines.append(f"    next page: {nxt or 'none'}")
+    producers = sorted({p for i in items
+                        for p in scraper.match_producers(i["text"])})
+    lines.append(f"    producers in the listing: {', '.join(producers) or '-'}")
+    for item in items[:5]:
+        stock = "in stock" if item["in_stock"] else "SOLD OUT"
+        lines.append(f"      {str(item['price']):>8}  {item['title'][:46]!r}  "
+                     f"{stock}  {item['url']}")
+    if len(items) > 5:
+        lines.append(f"      ... and {len(items) - 5} more")
+    # The question is usually "is this bottle here at all", and the answer is
+    # not in the parsed items when the parser is what is being doubted.
+    if find:
+        where = "in the parsed products" if any(
+            find.lower() in (i["title"] + i["url"]).lower() for i in items) else (
+            "in the raw markup only" if find.lower() in html.lower() else "nowhere")
+        lines.append(f"    {find!r}: {where}")
+    return lines
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", action="append", default=[],
@@ -354,6 +408,13 @@ def main(argv=None):
                              "(needs SEARCH_API_KEY/SEARCH_ENGINE_ID)")
     parser.add_argument("--limit", type=int, default=20,
                         help="Most candidates to assess")
+    parser.add_argument("--explain", action="store_true",
+                        help="Report what the parser sees at each --url "
+                             "instead of assessing it as a candidate shop. "
+                             "Keeps every URL, including several on one host.")
+    parser.add_argument("--find", default=None,
+                        help="With --explain, say whether this text is in the "
+                             "parsed products, the raw markup, or nowhere")
     args = parser.parse_args(argv)
 
     client = crawler.Crawler()
@@ -366,6 +427,16 @@ def main(argv=None):
     for producer in args.producer:
         query = f'"{producer}" vin naturel boutique en ligne livraison Danemark'
         candidates += search_candidates(query, client)
+
+    if args.explain:
+        # No host dedupe: the whole point is comparing pages on one shop.
+        if not candidates:
+            print("--explain needs at least one --url")
+            return 1
+        for url in candidates[:args.limit]:
+            for line in explain(url, client, args.find):
+                print(line)
+        return 0
 
     seen, ordered = set(), []
     for url in candidates:

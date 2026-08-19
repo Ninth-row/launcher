@@ -24,6 +24,14 @@ on:
         description: "Most candidates to assess"
         type: string
         default: "20"
+      explain:
+        description: "Report what the parser sees at each URL instead of assessing it as a new shop (keeps several URLs on one host)"
+        type: boolean
+        default: false
+      find:
+        description: "With explain: say whether this text is in the parsed products, the raw markup, or nowhere"
+        type: string
+        default: ""
 
 jobs:
   discover:
@@ -50,6 +58,8 @@ jobs:
           FROM_PAGE: ${{ inputs.from_page }}
           PRODUCERS: ${{ inputs.producers }}
           LIMIT: ${{ inputs.limit || '20' }}
+          EXPLAIN: ${{ (inputs.explain && '1') || '' }}
+          FIND: ${{ inputs.find }}
           # Absent, the web-search step is skipped rather than replaced by
           # scraping a results page. The key travels as a query parameter, so
           # discover.py redacts any URL it prints -- these run logs are public.
@@ -64,6 +74,8 @@ jobs:
             trimmed="$(echo "$item" | xargs)"
             if [ -n "$trimmed" ]; then args+=(--url "$trimmed"); fi
           done
+          if [ -n "$EXPLAIN" ]; then args+=(--explain); fi
+          if [ -n "$FIND" ]; then args+=(--find "$FIND"); fi
           IFS=',' read -ra people <<< "$PRODUCERS"
           for person in "${people[@]}"; do
             trimmed="$(echo "$person" | xargs)"

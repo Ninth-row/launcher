@@ -244,3 +244,55 @@ def test_outbound_hosts_are_collected_from_a_stockist_page():
     client = FakeCrawler({"https://importer.test/stockists": page})
     hosts = discover.links_from_page("https://importer.test/stockists", client)
     assert hosts == ["https://caviste-a.test", "https://caviste-b.test"]
+
+
+# --- explaining one page ------------------------------------------------------
+
+class OnePage:
+    def __init__(self, body):
+        self.body, self.urls = body, []
+
+    def get(self, url, params=None):
+        self.urls.append(url)
+        return crawler.FetchResult(200, self.body)
+
+
+LISTING = """
+<div class="grid">
+  <div class="card"><a href="/wine-1">Domaine Labet Vin Jaune</a><span>62,00 €</span></div>
+  <div class="card"><a href="/wine-2">Ganevat Les Chonchons</a><span>48,00 €</span></div>
+  <div class="card"><a href="/wine-3">Someone Else Chardonnay</a><span>20,00 €</span></div>
+</div>"""
+
+
+def test_explain_reports_what_the_parser_sees():
+    lines = "\n".join(discover.explain("https://shop.test/blanc", OnePage(LISTING)))
+    assert "3 product(s) parsed" in lines
+    assert "price cell(s)" in lines
+    assert "Labet" in lines and "Ganevat" in lines
+
+
+def test_explain_says_where_a_wine_is_or_is_not():
+    """The question that motivated it: the shop lists this bottle, so why did
+    the run not return it? "In the markup only" and "nowhere" are different
+    answers with different fixes."""
+    page = OnePage(LISTING)
+    assert "'vin jaune': in the parsed products" in "\n".join(
+        discover.explain("https://shop.test/blanc", page, find="vin jaune")).lower()
+    assert "'chablis': nowhere" in "\n".join(
+        discover.explain("https://shop.test/blanc", page, find="chablis")).lower()
+
+
+def test_explain_keeps_every_url_on_one_host(monkeypatch):
+    """Candidate assessment dedupes by host, which silently collapsed two
+    pages of the same shop into one and answered a question that had not
+    been asked. Stubbed rather than dispatched: no test may touch the
+    network, and main() builds its own Crawler."""
+    client = OnePage(LISTING)
+    monkeypatch.setattr(discover.crawler, "Crawler", lambda *a, **k: client)
+    rc = discover.main(["--explain",
+                        "--url", "https://shop.test/blanc",
+                        "--url", "https://shop.test/rouge"])
+    assert rc == 0
+    assert client.urls == ["https://shop.test/blanc", "https://shop.test/rouge"], \
+        "both pages of the same host must be read"
