@@ -410,6 +410,17 @@ SHOPS = [
     },
     # Nuits-Saint-Georges, 4000+ references, Burgundy-led -- the first shop
     # on this list where Roumier is a plausible find rather than a hope.
+    # Its landing page and its category pages both parse to nothing --
+    # 487KB, 20 currency-adjacent prices, 10 price cells, no repeated priced
+    # structure autoselect can see, because the markup nests (99 <article>
+    # opens against 10 closes, and lxml nests them exactly as the HTML5 spec
+    # says to). So the shop is read through its producer index instead. That
+    # is a real index: the grower pages state real catalogues (Ganevat's says
+    # 68 wines over 4 pages) but the grid on them is as unreadable as the
+    # rest, and until the facet filter existed the one "product" each page
+    # yielded was PrestaShop's price slider. Expect DRIFT here, and a note in
+    # the digest, until someone writes selectors for it -- that is the honest
+    # state, and it is better than the eight false DEALs it replaced.
     {
         "name": "cavescarriere",
         "platform": "html",

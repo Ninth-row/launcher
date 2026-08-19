@@ -320,6 +320,16 @@ HTTP header or printed.
   task — edit the dict directly.
 - Every scraping change (new shop, adapter fix, selector change) must pass
   the fixture tests in `tests/` before commit.
+- A price filter is not a listing. PrestaShop's faceted slider renders as
+  "Prix 22 € 550 €" linking `/prix`, and on a caves-carriere grower page read
+  at `min_blocks=1` it was the *only* group -- so all eight rows that shop put
+  in a digest were the widget: a dead link, the grower's name attached by the
+  producer-index reader, and the slider's minimum read as the price, which
+  against a Ganevat reference is a permanent DEAL. `autoselect.FILTER_LABELS`
+  judges a block by what is left once the prices are removed. Requiring a
+  label word is the whole of it: "prices and nothing else" also describes a
+  card that is an image and a price with the wine named only in its href,
+  which is how vinovivo's grid read, and a test keeps that markup.
 - A zero is not a price. Cart widgets ("Voir mon panier -- 0,00 EUR"), gift
   cards and "price on request" all carry a currency-adjacent zero, and zero
   is below every reference there will ever be, so such a row is a permanent

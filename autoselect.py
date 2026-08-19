@@ -231,6 +231,31 @@ def _title_for(block, anchor):
 # page that parses perfectly well; the three-block rule is for deciding
 # whether an *unknown* page is a catalogue, and on a page reached through
 # the producer index that question is already answered.
+# A price *filter* is priced and linked and is not a bottle. caves-carriere
+# renders PrestaShop's faceted slider as "Prix 22 € 550 €" linking /prix, and
+# on a grower page read at min_blocks=1 that widget was the only group, so
+# every row the shop contributed to the digest was the slider: a dead link,
+# the grower's name attached by the producer-index reader, and the slider's
+# minimum read as the price -- EUR 22 against a Ganevat reference is a
+# permanent DEAL. Recognised by what is left once the prices are removed,
+# because the label is all the widget has: a real card names a wine.
+FILTER_LABELS = frozenset((
+    "prix", "price", "prijs", "preis", "prezzo", "precio",
+    "tarif", "budget", "filtrer", "filter", "filters", "filtres",
+))
+
+
+def _is_price_filter(block, price_pattern):
+    text = block.get_text(" ", strip=True)
+    rest = price_pattern.sub(" ", text)
+    words = [w for w in textnorm.strip_accents(rest).split() if w.isalpha()]
+    # Prices and nothing else is *not* enough to condemn a block: a card can
+    # be an image and a price with the wine named only in its href, which is
+    # how vinovivo's grid read, and tests/test_autoselect.py keeps that
+    # markup. The label is the evidence, so require one.
+    return bool(words) and all(word in FILTER_LABELS for word in words)
+
+
 def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
     """Return [{text, title, price, url, variant_title}], or [] if the page
     has no repeated priced structure to read."""
@@ -240,7 +265,7 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
     blocks = []
     for node in _price_nodes(soup, price_pattern):
         block = _block_for(node, price_pattern)
-        if block is not None:
+        if block is not None and not _is_price_filter(block, price_pattern):
             blocks.append(block)
 
     # Siblings in a listing share a parent; the busiest parent is the grid.

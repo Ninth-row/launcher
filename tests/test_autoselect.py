@@ -497,6 +497,43 @@ def test_check_shop_does_not_alert_on_a_bottle_nobody_can_buy():
     assert scraper.check_shop(shop, Serve()) == []
 
 
+# --- a filter is not a listing -----------------------------------------------
+
+def test_a_price_filter_slider_is_not_a_product():
+    """caves-carriere's real rows, and eight false DEALs a run.
+
+    Its landing page parses to nothing, so the shop is read through its
+    producer index: each grower page at min_blocks=1. The only group those
+    pages yielded was PrestaShop's faceted price slider -- "Prix 22 € 550 €",
+    linking /prix -- so every row the shop put in the digest was that widget,
+    with a dead link, the grower's name attached by the index reader, and the
+    slider's minimum read as the price. EUR 22 against a Ganevat reference is
+    a permanent DEAL.
+    """
+    facet = ('<div id="search_filters"><section class="facet"><p>Prix</p>'
+             '<a href="/prix"><span>22 &euro;</span><span>550 &euro;</span></a>'
+             '</section></div>')
+    items = autoselect.find_products(
+        f"<html><body>{facet}</body></html>", "https://www.caves-carriere.fr/",
+        scraper.PRICE_PATTERN, scraper.parse_price, min_blocks=1)
+    assert items == []
+
+
+def test_a_price_filter_beside_a_real_grid_is_dropped_and_the_grid_kept():
+    facet = ('<div id="search_filters"><section><p>Prix</p>'
+             '<a href="/prix"><span>22 &euro;</span><span>550 &euro;</span></a>'
+             '</section></div>')
+    cards = "".join(
+        f'<div class="card"><a href="/vin-{i}">Ganevat Cuvee {i}</a>'
+        f'<span>29,00 &euro;</span></div>' for i in range(3))
+    items = autoselect.find_products(
+        f'<html><body>{facet}<div class="grid">{cards}</div></body></html>',
+        "https://www.caves-carriere.fr/", scraper.PRICE_PATTERN,
+        scraper.parse_price)
+    assert len(items) == 3
+    assert all("/prix" not in i["url"] for i in items)
+
+
 # --- every hit must be nameable ----------------------------------------------
 
 def test_a_card_with_only_an_image_and_a_price_still_gets_a_name():
