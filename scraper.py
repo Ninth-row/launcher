@@ -211,15 +211,20 @@ SHOPS = [
     # Re-run Probe Shops with apply to promote one; see its fixture and the
     # probe report for why it hasn't been promoted yet.
     {
-        # Hand-rolled PHP: no products.json, no Store API. The wines live at
-        # /vins.php (product pages are /vin-<id>-<region>_<colour>__<cuvee>_
-        # <vintage>_<producer>.html), so the landing page alone parses to
-        # nothing. Selectors below are the generic placeholders and are
-        # expected to miss -- autoselect reads the listing instead.
+        # Hand-rolled PHP: no products.json, no Store API. Product pages are
+        # /vin-<id>-<region>_<colour>__<cuvee>_<vintage>_<producer>.html, and
+        # two pages are needed to reach them. The landing page lists the
+        # newest arrivals and is the only crawlable listing the shop has --
+        # /vins.php was recorded as the catalogue but is a nav shell with no
+        # wine link on it at all -- while /domaines.php is the grower index
+        # the watched producers are reached through. Reading either alone
+        # loses the other half, so the landing page is the catalogue and the
+        # index is declared separately. Selectors below are the generic
+        # placeholders and are expected to miss; autoselect reads the listing.
         "name": "leszinzinsduvin",
         "platform": "html",
         "url": "https://www.leszinzinsduvin.com",
-        "catalog_path": "domaines.php",
+        "producer_index": "domaines.php",
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
@@ -1161,6 +1166,34 @@ def fetch_html(shop, crawler_client):
     if not items and first_html:
         items = _fetch_via_producer_index(shop, first_html, first_url, crawler_client)
         how = "index" if items else how
+
+    # A shop can have both, and then reading only one loses half the range.
+    # leszinzinsduvin puts its newest arrivals on the landing page and nothing
+    # else anywhere crawlable -- its /vins.php is a nav shell with no wine link
+    # on it at all -- while /domaines.php lists the growers. As a fallback the
+    # index only ran when the catalogue found nothing, so pointing the shop at
+    # its landing page would have silenced the growers and pointing it at the
+    # index hid the new arrivals. Declared per shop rather than tried for
+    # everyone: following a grower index is a request per grower, and a shop
+    # that already reads its catalogue should not spend them.
+    index_path = shop.get("producer_index")
+    if index_path:
+        index_url = urljoin(shop["url"].rstrip("/") + "/", index_path)
+        try:
+            index = crawler_client.get(index_url)
+            index.raise_for_status()
+        except (crawler.BudgetExceeded, crawler.UpstreamError, crawler.Challenged):
+            index = None
+        if index is not None:
+            known = {i["url"] for i in items}
+            extra = [i for i in _fetch_via_producer_index(
+                shop, index.text, index_url, crawler_client)
+                if i["url"] not in known]
+            if extra:
+                items = list(items) + extra
+                how = how or "index"
+                print(f"[{shop['name']}] producer index added {len(extra)} "
+                      f"listing(s) the catalogue did not have")
 
     if items and how == "auto":
         print(f"[{shop['name']}] no configured selector matched; "

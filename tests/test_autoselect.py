@@ -945,3 +945,78 @@ def test_a_real_wine_list_pdf_is_still_found():
     html = '<a href="/files/wijnlijst_winkel_257.pdf">Wijnlijst</a>'
     assert autoselect.find_pdf_link(html, "https://shop.test").endswith(
         "wijnlijst_winkel_257.pdf")
+
+
+# --- a shop that needs two pages ---------------------------------------------
+
+from pathlib import Path
+
+FIXTURES = Path(__file__).parent / "fixtures"
+LANDING = (FIXTURES / "leszinzinsduvin-landing.html").read_text()
+DOMAINES = (FIXTURES / "leszinzinsduvin-domaines-excerpt.html").read_text()
+GROWER = (FIXTURES / "leszinzinsduvin-grower-labet.html").read_text()
+
+ZINZIN = {
+    "name": "leszinzinsduvin", "platform": "html",
+    "url": "https://www.leszinzinsduvin.com",
+    "producer_index": "domaines.php",
+    "item_selector": "div.product", "title_selector": "h2.product-title",
+    "price_selector": "span.price", "verified": True,
+}
+
+
+class TwoPageShop:
+    """Landing page, grower index, and a page per grower."""
+
+    def __init__(self):
+        self.urls = []
+
+    def get(self, url, params=None):
+        self.urls.append(url)
+        if url.rstrip("/").endswith("leszinzinsduvin.com"):
+            return scraper.crawler.FetchResult(200, LANDING)
+        if "domaines.php" in url:
+            return scraper.crawler.FetchResult(200, DOMAINES)
+        if "/domaine-6-" in url:
+            return scraper.crawler.FetchResult(200, GROWER)
+        return scraper.crawler.FetchResult(200, "")
+
+
+def test_the_landing_page_is_read_as_well_as_the_grower_index():
+    """Reading either alone loses the other half. The landing page carries
+    the newest arrivals -- the only crawlable listing this shop has, since
+    /vins.php is a nav shell with no wine link on it -- and /domaines.php is
+    how the watched growers are reached. As a fallback the index only ran
+    when the catalogue found nothing, so the two were mutually exclusive."""
+    client = TwoPageShop()
+    items = scraper.fetch_html(ZINZIN, client)
+    titles = " ".join(i["title"] for i in items)
+    assert "Poulsard" in titles, "the landing page's new arrivals are missing"
+    assert any("/domaine-6-" in u for u in client.urls), \
+        "the grower index was never followed"
+    # The grower pages contribute their bottles, not their own URLs.
+    assert "Chercheurs d'or" in titles, "the grower page's bottles are missing"
+    assert len(items) > 4, "the index added nothing to the landing page"
+
+
+def test_the_landing_page_new_arrivals_are_priced_and_marked_sold_out():
+    """All four currently read 'Produit épuisé' -- a sold-out match is
+    remembered rather than alerted, and that is what makes a restock read as
+    a new find."""
+    items = find_at(LANDING, "https://www.leszinzinsduvin.com")
+    assert len(items) == 4
+    assert all(i["price"] for i in items)
+    assert all(i["in_stock"] is False for i in items)
+
+
+def test_a_shop_without_a_producer_index_fetches_no_extra_page():
+    """The index costs a request per grower, so it must stay opt-in."""
+    shop = dict(ZINZIN)
+    del shop["producer_index"]
+    client = TwoPageShop()
+    scraper.fetch_html(shop, client)
+    assert not any("domaines.php" in u for u in client.urls)
+
+
+def find_at(html, base):
+    return autoselect.find_products(html, base, PRICE, PARSE)
