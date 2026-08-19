@@ -745,3 +745,59 @@ def test_a_runaway_pager_still_stops(monkeypatch):
 
     assert client.request_count == 5
     assert result.truncated, "a walk cut short by the net must say so"
+
+
+# --- a grower filed under a different word order ------------------------------
+
+def test_a_grower_index_filing_the_name_backwards_still_matches():
+    """leszinzinsduvin files its growers surname-first. A two-word alias is
+    matched as a phrase, so "Fahrenkrug Alice" matched nothing and she was
+    reported "watched but found nowhere" while the shop had a page for her
+    the whole time."""
+    assert scraper.match_producers("Fahrenkrug Alice ....") == ["Alice Fahrenkrug"]
+    assert scraper.match_producers("Alice Fahrenkrug") == ["Alice Fahrenkrug"]
+
+
+@pytest.mark.parametrize("card", [
+    # The same 395-grower index, read by a crude surname scan, "finds" a
+    # watched producer on all of these. Every one is somebody else.
+    "Andrey Pierre Travail pur avec des jus de qualite",
+    "Boisson Anne fille de Bernard 1 5 ha du domaine",
+    "Batardiere Thomas Rablay sur Layon",
+    "Henin Romain Fils d une famille de vignerons",
+    "Metras Jules Evidemment lui aussi installe en",
+    "Leroy Fiona tout est bien dit sur le site",
+    "Maisons Brulees Paul et Corinne Gillet on repris",
+    "Tixier Thomas .....",
+    "Overnoy Crinquand Le domaine OVERNOY CRINQUAND",
+    "Fimbel/Houillon .....",
+])
+def test_a_first_name_in_common_is_not_a_producer(card):
+    """The reversed-order alias must not become a licence to match on a
+    given name. These are real cards from the same index."""
+    assert scraper.match_producers(card) == [], (
+        f"{card!r} was attributed to a watched producer"
+    )
+
+
+def test_the_empty_grower_pages_are_named_not_just_counted():
+    """"3 listing nothing" cannot be acted on. Which grower came back empty
+    is the difference between a page with no wines today and a page this
+    adapter cannot read."""
+    import io, contextlib
+    import autoselect
+
+    index = (FIXTURES / "leszinzinsduvin-domaines-excerpt.html").read_text()
+
+    class Empty:
+        def get(self, url, params=None):
+            return scraper.crawler.FetchResult(200, "<html><body></body></html>")
+
+    shop = shop_by_name("leszinzinsduvin")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        scraper._fetch_via_producer_index(
+            shop, index, "https://www.leszinzinsduvin.com/domaines.php", Empty())
+    line = out.getvalue()
+    assert "listing nothing" in line
+    assert "Ganevat" in line, "the empty grower pages must be named"

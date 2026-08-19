@@ -145,7 +145,13 @@ PRODUCERS = {
     "Domaine Calice": ["domaine du calice", "du calice", "loic calice", "calice"],
     "Thomas Popy": ["thomas popy", "popy"],
     "Roumier": ["roumier"],
-    "Alice Fahrenkrug": ["alice fahrenkrug"],
+    # Both orders. leszinzinsduvin's grower index files her as "Fahrenkrug
+    # Alice", and a two-word alias is matched as a phrase, so the reversed
+    # form matched nothing and she was reported "found nowhere" while the
+    # shop had a page for her all along. Not a bare "fahrenkrug": the same
+    # index carries 395 growers and a surname alone is how a namesake gets
+    # reported as the wrong estate.
+    "Alice Fahrenkrug": ["alice fahrenkrug", "fahrenkrug alice"],
     # Not a bare "brochet": Emmanuel Brochet is a different
     # Champagne grower, and mareehaute stocks him -- the bare
     # surname reported his bottles as this producer.
@@ -976,7 +982,7 @@ def _fetch_via_producer_index(shop, index_html, index_url, crawler_client):
     if not targets:
         return []
 
-    items, empty = [], 0
+    items, empty = [], []
     for producer, url in targets[:autoselect.MAX_INDEX_LINKS]:
         try:
             page = crawler_client.get(url)
@@ -988,16 +994,20 @@ def _fetch_via_producer_index(shop, index_html, index_url, crawler_client):
         # the index.
         page_items, _ = _parse_html_page(shop, page.text, url, min_blocks=1)
         if not page_items:
-            empty += 1
+            empty.append(producer)
         for item in page_items:
             # The grower's own page may not repeat their name on every row.
             item["text"] = f"{producer} {item['text']}"
         items.extend(page_items)
     followed = len(targets[:autoselect.MAX_INDEX_LINKS])
     in_stock = sum(1 for i in items if i.get("in_stock") is not False)
+    # Name them. "3 listing nothing" cannot be acted on; knowing *which*
+    # grower came back empty is the difference between a page that has no
+    # wines today and a page this adapter cannot read.
+    empty_note = f" ({', '.join(sorted(set(empty)))})" if empty else ""
     print(f"[{shop['name']}] no crawlable catalogue; followed {followed} producer "
-          f"page(s) from the index, {empty} listing nothing; read {len(items)} "
-          f"product(s), {in_stock} in stock")
+          f"page(s) from the index, {len(empty)} listing nothing{empty_note}; "
+          f"read {len(items)} product(s), {in_stock} in stock")
     return items
 
 
