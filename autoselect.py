@@ -712,14 +712,29 @@ def find_catalogue_links(html, base_url, exclude=()):
     LIST_PAGE = ("wijnkaart", "wijnlijst", "prijslijst", "tarif", "carte",
                  "bestellen", "commander")
 
+    # A facet is the catalogue with most of it hidden. lacaveduchateau's menu
+    # links ten of them -- /vins.html?couleur=Rouge, ?region=Bourgogne, ... --
+    # and the bare /vins.html that holds the whole range. All eleven share a
+    # path, so they ranked identically, the ten facets filled MAX_CATALOGUE_LINKS
+    # in document order, and the one URL that is the catalogue was cut off the
+    # end of the list. The probe seeds its queue from here, so that shop's
+    # range had never once been requested: it was read as the 17 bottles on its
+    # home page. Demoted rather than dropped -- a shop whose only catalogue is
+    # a query URL must keep it -- and dropped only when its own bare path is
+    # also on offer, which is the same URL with more of the shop in it.
+    bare_paths = {urlparse(u).path for u in found if not urlparse(u).query}
+    found = [u for u in found
+             if not (urlparse(u).query and urlparse(u).path in bare_paths)]
+
     def rank(url):
-        path = urlparse(url).path
+        parsed = urlparse(url)
+        path = parsed.path
         return (
             # A slice of the catalogue is a last resort, but a list page is a
             # first one -- ahead of even a numbered category.
             not any(marker in path for marker in LIST_PAGE),
             # A slice of the catalogue is a last resort, not a first guess.
-            any(marker in path for marker in SECOND_CHOICE),
+            any(marker in path for marker in SECOND_CHOICE) or bool(parsed.query),
             # A numbered category is the catalogue as the shop files it.
             not NUMBERED_CATEGORY.search(path),
             # A bottle's own page sits under a category; a category sits at

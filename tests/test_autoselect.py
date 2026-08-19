@@ -497,6 +497,34 @@ def test_check_shop_does_not_alert_on_a_bottle_nobody_can_buy():
     assert scraper.check_shop(shop, Serve()) == []
 
 
+def test_a_facet_never_crowds_out_the_catalogue_it_slices():
+    """lacaveduchateau's real menu, and a shop whose range was never fetched.
+
+    It links ten facets of /vins.html -- ?couleur=Rouge, ?region=Bourgogne,
+    ... -- and the bare /vins.html holding the whole range. All eleven share
+    a path, so they ranked identically, the ten facets filled
+    MAX_CATALOGUE_LINKS in document order, and the catalogue itself was cut
+    off the end. The probe seeds its queue from here, so that shop had only
+    ever been read as the 17 bottles on its home page.
+    """
+    html = (pathlib.Path(__file__).parent / "fixtures"
+            / "lacaveduchateau.html").read_text(encoding="utf-8", errors="replace")
+    found = autoselect.find_catalogue_links(html, "https://www.lacaveduchateau.com")
+
+    assert "https://www.lacaveduchateau.com/vins.html" in found
+    assert not [u for u in found if "couleur=" in u or "region=" in u], \
+        "a facet of a path we already offer bare is the same page with less in it"
+
+
+def test_a_shop_whose_only_catalogue_is_a_query_url_keeps_it():
+    """Demoted, not dropped: with no bare sibling the facet is what there is."""
+    html = ('<html><body><nav>'
+            '<a href="/index.php?controller=category&amp;id=vins">Tous les vins</a>'
+            '<a href="/contact">Contact</a></nav></body></html>')
+    found = autoselect.find_catalogue_links(html, "https://shop.test")
+    assert any("controller=category" in u for u in found)
+
+
 # --- a filter is not a listing -----------------------------------------------
 
 def test_a_price_filter_slider_is_not_a_product():
