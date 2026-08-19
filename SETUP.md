@@ -91,7 +91,12 @@ State/output files (all gitignored, all safe to delete): `seen.json` (per-item
 cooldown state), `observations.json` (the observed price pool the references
 are drawn from), `.cache/` (the disk cache), `hits.json` (every evaluated hit
 from the last run, regardless of whether it was alert-worthy) and
-`coverage.json` (the per-shop coverage table).
+`coverage.json` (the per-shop coverage table). They were not all gitignored:
+`coverage.json` was tracked, and the copy in the repo was test output naming
+three shops that do not exist (`zzz-shopify`, `zzz-woo`, `zzz-html`), left by
+a run predating the fixture that redirects it to a temp dir. Two workflows
+`git add -A`, so an untracked state file in the tree is one probe away from
+being committed.
 
 Deleting `observations.json` is safe but not free: references are observed
 from our own crawl, so a fresh pool classifies more hits as `NOREF` until

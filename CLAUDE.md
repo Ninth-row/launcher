@@ -424,6 +424,35 @@ HTTP header or printed.
 - A wine seen at no other shop gets no reference. Do not add a fallback
   that invents one -- `NOREF` is a real answer and the hit is still
   reported.
+- A restock is the alert this scraper exists to send, and it needs presence
+  timestamped. Nothing about a sold-out listing is persisted -- but nothing
+  *erases* its `seen.json` entry either, so a bottle returning inside 30 days
+  was not new, had not dropped 10%, and was inside the cooldown: silent. For
+  growers allocated in a few dozen bottles that gap is the normal case, so
+  the promise was kept only for a bottle gone over a month. `last_seen_at` is
+  written for every **in-stock** hit -- a sold-out listing still writes
+  nothing -- and a return after `ABSENT_DAYS` alerts, cooldown-exempt for the
+  same reason a drop is. The load-bearing guard is the shop's *previous*
+  successful read (`_came_back`): after a shop is unreachable for a week every
+  listing on it looks absent, and announcing its whole shelf as restocked is
+  a lie. One run re-stamps them quietly first.
+- Every row says why it is there. `alert_reason` distinguishes new / drop /
+  back / deal, and the reason reaches the email -- a bottle first seen at
+  EUR 60 used to render byte-identically to one that fell from EUR 100.
+- Losing the observed price pool is silent by construction:
+  `market.load_observations` returns an empty store for a missing file and a
+  corrupt one alike, so the run is green, emails on schedule, and classifies
+  everything `NOREF` -- which from the inbox is a quiet week. `main()` states
+  the carried-in count every run and notes it when a pool arrives empty.
+- The run's result goes to `$GITHUB_STEP_SUMMARY` as well as the artifact.
+  `hits.json` expires in 30 days and cannot be opened from a phone; answering
+  "is this bottle in the results?" once cost a twelve-minute live re-crawl.
+  Display only -- it marks nothing alerted and touches no state.
+- `scraper.yml` and `discover.yml` run `permissions: contents: read` with
+  `persist-credentials: false`. They are the two jobs that feed third-party
+  HTML, JSON and PDFs through bs4 and pypdf, and neither pushes anything, so
+  a parser bug or a bad dependency release must not come with a token that
+  can write to `main` -- which is what the next scheduled run executes.
 - A sold-out match is remembered, never alerted. `check_shop` matches
   every parsed listing and puts out-of-stock matches on
   `ShopResult.sold_out`; they must stay out of `hits.json`, out of the
@@ -643,7 +672,13 @@ HTTP header or printed.
   `wine.html` is the only conflicted file, and fails loudly on any other;
   `dashboard.yml` never rebases at all -- it resets to the new head, rebuilds
   on top, and exits quietly if someone else already did.
-- A workflow input never reaches a shell command line. It goes through
+- A workflow input never reaches a shell command line, and neither does a
+  `github.*` context. `tests/test_workflows.py` scanned only
+  `inputs|github.event|steps`, so it could not see `probe.yml` splicing
+  `${{ github.ref_name }}` into `git pull --rebase` in a job holding
+  `contents: write` -- and a git ref may legally contain `$`, backticks,
+  parentheses and semicolons, while `${{ }}` substitutes before the shell
+  parses. It goes through
   `env:` and is read as a quoted variable -- `"$ONLY"`, never
   `--only ${{ inputs.only }}`. A probe dispatched with "Lapangee,
   lavinoterie" in that box became two shell arguments and crashed the run,

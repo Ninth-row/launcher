@@ -22,7 +22,15 @@ WORKFLOWS = sorted((Path(__file__).parent.parent / ".github" / "workflows").glob
 
 # ${{ inputs.x }}, ${{ github.event.issue.body }}, and step outputs derived
 # from either -- all of them are text somebody outside this repo can choose.
-UNTRUSTED_EXPRESSION = re.compile(r"\$\{\{\s*(inputs|github\.event|steps)\b")
+#
+# github.* is in here too, and it was not: probe.yml spliced
+# ${{ github.ref_name }} straight into a `git pull --rebase` in a job holding
+# contents: write. A git ref may legally contain $, backticks, parentheses
+# and semicolons, and ${{ }} is substitution before the shell parses -- so a
+# branch named x$(...) is command execution. It needs push access, so it is
+# defence in depth rather than a boundary, but it is exactly the shape this
+# repo already decided to ban, and the old pattern could not see it.
+UNTRUSTED_EXPRESSION = re.compile(r"\$\{\{\s*(inputs|github|steps)\b")
 
 
 def run_blocks(path):

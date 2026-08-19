@@ -99,6 +99,13 @@ jobs:
 
       - name: Commit verified shops
         if: inputs.apply || inputs.capture != ''
+        env:
+          # Through the environment for the same reason a dispatch box is:
+          # ${{ }} is textual substitution before the shell parses, and a git
+          # ref may legally contain $, backticks, parentheses and semicolons.
+          # This job holds contents: write.
+          BRANCH: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           rm -rf probe_output
           if [ -z "$(git status --porcelain)" ]; then
@@ -108,7 +115,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Verify shops from probe run ${{ github.run_id }}
+          git commit -m "Verify shops from probe run $RUN_ID
 
           Real responses fetched and parsed in this run; fixtures saved
           (trimmed, keeping producer matches), platforms corrected and
@@ -123,7 +130,7 @@ jobs:
               exit 0
             fi
             echo "Push rejected (attempt $attempt); rebasing onto the branch head."
-            if ! git pull --rebase origin "${{ github.ref_name }}"; then
+            if ! git pull --rebase origin "$BRANCH"; then
               # wine.html is generated, so the only correct resolution is to
               # regenerate it -- and the dashboard workflow rebuilds it on
               # main after every push, so the two copies always differ. Probe

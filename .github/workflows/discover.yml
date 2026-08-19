@@ -37,6 +37,14 @@ on:
         type: string
         default: ""
 
+# Read-only, and no credential left in the checkout. These two jobs are the
+# ones that feed third-party HTML, JSON and PDFs from every configured shop
+# through bs4 and pypdf, and neither pushes anything -- so a parser bug or a
+# bad dependency release must not come with a token that can write to main,
+# which is what the next scheduled run executes.
+permissions:
+  contents: read
+
 jobs:
   discover:
     runs-on: ubuntu-latest
@@ -45,6 +53,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:

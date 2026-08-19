@@ -75,6 +75,59 @@ def test_drift_reaches_the_digest_not_only_the_log(pipeline):
     assert "zzz-shopify" in body
 
 
+def test_the_run_writes_its_result_to_the_actions_step_summary(pipeline, tmp_path,
+                                                              monkeypatch):
+    """hits.json goes out as a zip that expires in 30 days and cannot be
+    opened from a phone; answering "is this bottle in the results?" cost a
+    twelve-minute live re-crawl. The step summary is the run's own page."""
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    pipeline(BASIC)
+
+    written = summary.read_text()
+    assert "## Coverage" in written and "zzz-shopify" in written
+    assert "## Hits" in written
+    assert "Zzz Domaine" in written, "the hits must be named, not counted"
+
+
+def test_no_step_summary_outside_actions(pipeline, tmp_path, monkeypatch):
+    """A local run has no GITHUB_STEP_SUMMARY and must not invent one."""
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    pipeline(BASIC)                      # must not raise
+    assert not list(tmp_path.glob("summary*"))
+
+
+def test_an_empty_reference_pool_is_reported(pipeline, capsys):
+    """Losing the pool is the last silent failure in main().
+
+    Every price verdict rests on it, and market.load_observations returns an
+    empty store for a missing file and a corrupt one alike. The run is then
+    green, emails on schedule, and classifies everything NOREF -- which from
+    the inbox is a week when no shop stocked a match. It is carried between
+    runs by actions/cache, which is evictable, so this is a real state.
+    """
+    pipeline(BASIC)                      # first run: nothing carried in
+    out = capsys.readouterr().out
+    assert "POOL:" in out
+    assert "carried in from previous runs" in out
+    assert "Reference pool" in pipeline.sent[-1], "and it reaches the digest"
+
+
+def test_a_run_with_a_pool_says_nothing_about_it(pipeline, capsys):
+    """It must stay a note about a real failure, not a line every run.
+
+    Asserted on the second run's own output, not on the last email: with
+    nothing newly alert-worthy the second run correctly sends nothing, so
+    the last email is still the first run's.
+    """
+    pipeline(BASIC)
+    capsys.readouterr()
+    pipeline(BASIC)                      # the second run carries the first in
+    out = capsys.readouterr().out
+    assert "5 carried in from previous runs" in out
+    assert "POOL:" not in out
+
+
 def test_a_healthy_run_says_nothing_about_drift(pipeline):
     pipeline(BASIC)
     body = pipeline.sent[-1]

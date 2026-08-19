@@ -80,6 +80,45 @@ def coverage_row(shop, result=None, status="ok"):
     }
 
 
+def write_step_summary(table, notes, evaluated):
+    """The run's own result, on the run's own page.
+
+    hits.json and coverage.json go out as an artifact zip that expires in 30
+    days and that nothing can open from a phone -- answering "is this bottle
+    in the results?" cost a twelve-minute live re-crawl and a log read. A step
+    summary is markdown on the Actions run page: no permissions, no state, no
+    extra request, and it renders for a run that failed, where the artifact is
+    least useful.
+
+    Display only. It marks nothing as alerted and touches no state.
+    """
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    out = ["## Coverage", "```", *table, "```"]
+    for heading, names in (notes or {}).items():
+        if names:
+            out += ["", f"**{heading}** ({len(names)}): {', '.join(names)}"]
+    shown = evaluated[:SUMMARY_ROW_CAP]
+    if shown:
+        out += ["", "## Hits", "",
+                "| | producer | wine | price | ref | shop | link |",
+                "|-|-|-|-|-|-|-|"]
+        for h in shown:
+            price = f"EUR {h['price']:.0f}" if h.get("price") is not None else "?"
+            ref = (f"EUR {h['expected_price']:.0f}"
+                   if h.get("expected_price") is not None else "?")
+            wine = (h.get("cuvee") or h.get("title") or "").replace("|", "/")[:60]
+            out.append(
+                f"| {h.get('classification', 'NOREF')} | {h.get('producer', '')} "
+                f"| {wine} | {price} | {ref} | {h.get('shop', '')} "
+                f"| {h.get('url', '')} |")
+    if len(evaluated) > len(shown):
+        out += ["", f"...and {len(evaluated) - len(shown)} more in hits.json."]
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write("\n".join(out) + "\n")
+
+
 def coverage_table(rows):
     """The table as lines of text, aligned, for the log and the email."""
     if not rows:
@@ -122,6 +161,9 @@ WOO_PAGE_SIZE = 100
 # 118 rather than clipped to a round number that reported 480 of its 2827 wines
 # as though 480 were the catalogue. This only stops a runaway pager.
 MAX_PAGES_PER_SHOP = 150
+# Rows in the Actions step summary. The page has a 1MB ceiling and this is a
+# glance, not the record -- hits.json is still the whole of it.
+SUMMARY_ROW_CAP = 300
 
 # ---------------------------------------------------------------------------
 # Estates that share a surname with a producer above and are NOT wanted.
@@ -1592,10 +1634,27 @@ def main():
     aliases = market.aliases_by_producer(PRODUCERS)
 
     store = market.load_observations()
+    # Every price verdict rests on this pool, and losing it is silent by
+    # construction: load_observations returns an empty store for a missing
+    # file and for a corrupt one alike, so a run that lost it is green, emails
+    # on schedule, and quietly classifies everything NOREF -- which from the
+    # inbox is indistinguishable from a week when no shop stocked a match.
+    # It is carried between runs by actions/cache, which is best-effort and
+    # evictable, so this is a real state, not a hypothetical one.
+    pool_before = len(store.get("records") or [])
     sized = [evaluate.evaluate_hit(hit, pricebook) for hit in all_hits]
     fresh = [o for o in (market.observation(h, format_multipliers, aliases) for h in sized) if o]
     store = market.merge(store, fresh)
-    print(f"{len(fresh)} listing(s) recorded; {len(store['records'])} in the reference pool.")
+    print(f"{len(fresh)} listing(s) recorded; {len(store['records'])} in the reference pool "
+          f"({pool_before} carried in from previous runs).")
+    lost_pool = []
+    if not pool_before and any(r.get("status") in ("ok", "TRUNCATED") for r in coverage):
+        lost_pool = [
+            "the observed price pool arrived empty, so every verdict this run "
+            "rests on this run's own crawl alone -- expect NOREF. It is "
+            "rebuilt from here; if this repeats, the run state is not "
+            "surviving between runs"]
+        print(f"POOL: {lost_pool[0]}")
 
     evaluated = evaluate.evaluate_hits(all_hits, pricebook, store, aliases)
 
@@ -1607,16 +1666,21 @@ def main():
     # reached is not announced as a restock when the shop comes back.
     shops_read = {r["shop"] for r in coverage
                   if r.get("status") in ("ok", "TRUNCATED")}
-    notify.run_digest(evaluated, dry_run=DRY_RUN, force=FORCE_REPORT,
-                      shops_read=shops_read,
-                      tables={"Shop coverage": table}, notes={
+    notes = {
         "Shops that returned nothing": silent_shops,
         "Blocked by a bot challenge": blocked_shops,
         "Matched but sold out everywhere": sold_out_only,
         unseen_title: unseen,
         "Shops not reached this run": [s["name"] for s in unreached],
+        "Reference pool": lost_pool,
         "Alias near-misses": misses,
-    })
+    }
+    # Before the email, so the run's own page carries the result even when the
+    # digest is empty, capped, or never sent at all.
+    write_step_summary(table, notes, evaluated)
+    notify.run_digest(evaluated, dry_run=DRY_RUN, force=FORCE_REPORT,
+                      shops_read=shops_read,
+                      tables={"Shop coverage": table}, notes=notes)
 
 
 if __name__ == "__main__":
