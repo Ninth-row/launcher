@@ -289,6 +289,139 @@ def test_successful_send_does_mark_the_item_alerted(tmp_path, monkeypatch):
     assert second == [], "an delivered alert must go into cooldown"
 
 
+# --- the restock, which is the point of never persisting a sold-out match ----
+
+SHOPS = {"example-shop"}
+
+
+def _sell_out_for(state, days, now, shops_read=SHOPS):
+    """The shop is read every run; the bottle simply is not in the results.
+
+    That is exactly what check_shop does with a sold-out match: it diverts it
+    to ShopResult.sold_out, so notify is passed no hit for it at all.
+    """
+    for day in range(1, days + 1):
+        _, state = notify.select_alerts([], state=state,
+                                        now=now + timedelta(days=day),
+                                        shops_read=shops_read)
+    return state
+
+
+def test_a_bottle_that_sold_out_and_came_back_alerts_again():
+    """The alert CLAUDE.md calls the most valuable one this scraper sends,
+    and it fired almost never. Nothing about a sold-out listing is persisted
+    -- but nothing erases its entry either, so a return inside 30 days was no
+    longer new, had not dropped 10%, and was inside the cooldown: silent. For
+    growers allocated in a few dozen bottles that gap is the normal case."""
+    hit = make_hit(classification="FAIR")
+    t0 = datetime.now(timezone.utc) - timedelta(days=11)
+
+    alerting, state = notify.select_alerts([dict(hit)], state={}, now=t0,
+                                           shops_read=SHOPS)
+    assert [h["alert_reason"] for h in alerting] == ["new"]
+
+    state = _sell_out_for(state, 10, t0)
+    back, state = notify.select_alerts([dict(hit)], state=state,
+                                       now=t0 + timedelta(days=11),
+                                       shops_read=SHOPS)
+
+    assert len(back) == 1, "a restock inside the cooldown must still alert"
+    assert back[0]["alert_reason"] == "back"
+
+
+def test_a_shop_we_could_not_reach_does_not_come_back_as_a_restock():
+    """An unreachable shop makes every listing on it look absent. Without
+    this guard the shop returning would announce its whole shelf as
+    restocked, which is a lie and a flooded inbox."""
+    hit = make_hit(classification="FAIR")
+    t0 = datetime.now(timezone.utc) - timedelta(days=11)
+
+    _, state = notify.select_alerts([dict(hit)], state={}, now=t0, shops_read=SHOPS)
+    state = _sell_out_for(state, 10, t0, shops_read=())   # nobody read the shop
+
+    back, state = notify.select_alerts([dict(hit)], state=state,
+                                       now=t0 + timedelta(days=11),
+                                       shops_read=SHOPS)
+    assert back == [], "we were not looking; that is not a restock"
+
+
+def test_a_brief_absence_is_not_a_restock():
+    """Runs are two-hourly with a six-hour cache, so a day of absence is
+    jitter -- a rotated budget, a timeout, a page that moved."""
+    hit = make_hit(classification="FAIR")
+    t0 = datetime.now(timezone.utc) - timedelta(days=3)
+
+    _, state = notify.select_alerts([dict(hit)], state={}, now=t0, shops_read=SHOPS)
+    state = _sell_out_for(state, 2, t0)
+    back, _ = notify.select_alerts([dict(hit)], state=state,
+                                   now=t0 + timedelta(days=3), shops_read=SHOPS)
+    assert back == []
+
+
+def test_an_entry_from_before_this_existed_does_not_alert_as_a_restock():
+    """Every entry in the live seen.json predates last_seen_at. Reading a
+    missing stamp as "absent forever" would re-alert the whole shelf on the
+    first run after deploy."""
+    hit = make_hit(classification="FAIR")
+    now = datetime.now(timezone.utc)
+    old_entry = {notify.item_key(hit): {
+        "last_price": 55.0, "last_alerted_price": 55.0,
+        "last_alerted_at": (now - timedelta(days=20)).isoformat(),
+        "last_classification": "FAIR"}}
+    state = {**old_entry, notify.META_KEY: {"shops": {
+        "example-shop": (now - timedelta(hours=2)).isoformat()}}}
+
+    alerting, state = notify.select_alerts([dict(hit)], state=state, now=now,
+                                           shops_read=SHOPS)
+    assert alerting == []
+    assert state[notify.item_key(hit)]["last_seen_at"], "but it is stamped now"
+
+
+def test_a_sold_out_run_persists_nothing_about_the_missing_bottle():
+    """The invariant the restock rests on: presence is timestamped, absence
+    never is."""
+    hit = make_hit(classification="FAIR")
+    t0 = datetime.now(timezone.utc)
+    _, state = notify.select_alerts([dict(hit)], state={}, now=t0, shops_read=SHOPS)
+    before = dict(state[notify.item_key(hit)])
+
+    _, state = notify.select_alerts([], state=state, now=t0 + timedelta(days=1),
+                                    shops_read=SHOPS)
+    assert state[notify.item_key(hit)] == before
+
+
+# --- saying why a row is in the email ----------------------------------------
+
+def test_a_price_drop_says_what_it_fell_from():
+    """A first sighting at EUR 60 and a fall from EUR 100 to EUR 60 rendered
+    identically, and the drop rule is the one this file argues hardest for."""
+    now = datetime.now(timezone.utc)
+    _, state = notify.select_alerts([make_hit(price=100.0)], state={}, now=now,
+                                    shops_read=SHOPS)
+    dropped, _ = notify.select_alerts([make_hit(price=60.0)], state=state,
+                                      now=now + timedelta(days=1),
+                                      shops_read=SHOPS)
+
+    assert dropped[0]["alert_reason"] == "drop"
+    phrase = notify.reason_phrase(dropped[0])
+    assert "40%" in phrase and "100" in phrase
+    assert phrase in notify.format_row(dropped[0])
+    assert phrase in notify.build_digest_html(dropped, {})
+
+
+def test_a_restock_says_how_long_it_was_gone():
+    hit = make_hit(classification="FAIR")
+    t0 = datetime.now(timezone.utc) - timedelta(days=11)
+    _, state = notify.select_alerts([dict(hit)], state={}, now=t0, shops_read=SHOPS)
+    state = _sell_out_for(state, 10, t0)
+    back, _ = notify.select_alerts([dict(hit)], state=state,
+                                   now=datetime.now(timezone.utc),
+                                   shops_read=SHOPS)
+    phrase = notify.reason_phrase(back[0])
+    assert "back in stock" in phrase
+    assert phrase in notify.format_row(back[0])
+
+
 def _many_hits(count):
     """`count` distinct alert-worthy hits, all new, all the same shape."""
     return [make_hit(classification="FAIR", price=50.0 + i,

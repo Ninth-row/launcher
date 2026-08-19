@@ -21,6 +21,12 @@ STATE_PATH = Path(os.environ.get("SEEN_STATE_PATH", Path(__file__).parent / "see
 HITS_PATH = Path(os.environ.get("HITS_OUTPUT_PATH", Path(__file__).parent / "hits.json"))
 
 COOLDOWN_DAYS = 30
+# How long a listing must be gone before coming back counts as news. Runs are
+# two-hourly and the crawler caches for six hours, so a day or two of absence
+# is jitter -- a rotated budget, a shop that timed out, a page that moved.
+# Four days is comfortably past that and still inside the cooldown, which is
+# the whole point: a restock is the alert this scraper exists to send.
+ABSENT_DAYS = 4
 PRICE_DROP_THRESHOLD = 0.10
 EMAIL_ROW_CAP = 40
 SECTION_ORDER = ["DEAL", "FAIR", "NOREF", "HIGH", "NOALERT"]
@@ -67,7 +73,7 @@ def _parse_iso(ts):
     return datetime.fromisoformat(ts)
 
 
-def should_alert(hit, prev, now):
+def alert_reason(hit, prev, now, shop_last_read=None):
     """new item -> always. A >10% drop since the last alert -> always, too:
     the cooldown is there to stop the digest repeating itself, and a price
     drop is not a repeat. Otherwise the 30-day cooldown blocks re-alerting,
@@ -91,10 +97,10 @@ def should_alert(hit, prev, now):
     # listing worth seeing, it is just never news at any price, because its
     # price says nothing about the domaine bottles we are actually hunting.
     if hit.get("alertable") is False:
-        return False
+        return None
 
     if prev is None:
-        return True
+        return "new"
 
     last_alerted_price = prev.get("last_alerted_price")
     price = hit.get("price")
@@ -104,19 +110,62 @@ def should_alert(hit, prev, now):
         and price <= last_alerted_price * (1 - PRICE_DROP_THRESHOLD)
     )
     if price_dropped:
-        return True
+        return "drop"
+
+    if _came_back(prev, now, shop_last_read):
+        return "back"
 
     last_alerted_at = prev.get("last_alerted_at")
     if last_alerted_at and (now - _parse_iso(last_alerted_at)).days < COOLDOWN_DAYS:
-        return False
+        return None
 
-    return (hit.get("classification") == "DEAL"
-            and prev.get("last_classification") != "DEAL")
+    return ("deal" if (hit.get("classification") == "DEAL"
+                       and prev.get("last_classification") != "DEAL") else None)
+
+
+def should_alert(hit, prev, now, shop_last_read=None):
+    """Kept as the boolean the tests and callers read."""
+    return alert_reason(hit, prev, now, shop_last_read) is not None
+
+
+def _came_back(prev, now, shop_last_read):
+    """Was this listing gone, and is it back?
+
+    The restock is the alert CLAUDE.md calls the most valuable one this
+    scraper sends, and it was almost never fired. A sold-out listing is
+    deliberately never persisted -- but nothing *erases* it either, so its
+    entry sat in seen.json with `last_alerted_at` from the day it was first
+    found. Coming back a fortnight later, it was no longer new, had not
+    dropped 10%, and was inside the 30-day cooldown: silent. For growers
+    allocated in a few dozen bottles, that gap is the normal case, so the
+    promise was kept only for a bottle absent longer than a month.
+
+    Presence is timestamped, absence never is -- `last_seen_at` is written
+    for every in-stock hit, so a sold-out listing still writes nothing.
+
+    `shop_last_read` is the shop's *previous* successful read, taken before
+    this run stamps its own. It is what separates "the bottle was gone" from
+    "we were not looking": after a shop is unreachable for a week, every
+    listing on it looks absent, and without this the shop coming back would
+    announce its whole shelf as restocked. One run re-stamps them quietly,
+    and absence is measured against a shop we were actually reading.
+    """
+    last_seen_at = prev.get("last_seen_at")
+    if not last_seen_at or not shop_last_read:
+        return False
+    if (now - _parse_iso(last_seen_at)).days < ABSENT_DAYS:
+        return False
+    return (now - _parse_iso(shop_last_read)).days < ABSENT_DAYS
 
 
 def _update_state(state, hit, key, alerted, now):
     entry = dict(state.get(key, {}))
     entry["last_price"] = hit.get("price")
+    # Presence, stamped for every in-stock hit whether it alerted or not.
+    # Absence is never recorded -- a sold-out listing does not reach here at
+    # all -- so this stays inside the rule that nothing about a sold-out
+    # bottle is persisted, while still letting a return be recognised.
+    entry["last_seen_at"] = now.isoformat()
     if alerted:
         entry["last_alerted_price"] = hit.get("price")
         entry["last_alerted_at"] = now.isoformat()
@@ -149,21 +198,67 @@ def _hold_back(updated, previous, held):
     return updated
 
 
-def select_alerts(hits, state=None, now=None):
+def select_alerts(hits, state=None, now=None, shops_read=()):
     """Decide which hits are alert-worthy this run, and return the updated
-    state. last_price is refreshed for every hit seen, alerted or not, so
-    future price-drop comparisons stay accurate."""
+    state. last_price and last_seen_at are refreshed for every hit seen,
+    alerted or not, so drop and absence comparisons stay accurate.
+
+    `shops_read` names the shops this run actually read. Their previous read
+    times are taken *before* being restamped, because that is what tells a
+    bottle that was gone from a shop we could not reach -- see `_came_back`.
+    """
     now = now or datetime.now(timezone.utc)
     state = {} if state is None else dict(state)
+    meta = dict(state.get(META_KEY) or {})
+    reads = dict(meta.get("shops") or {})
+
     alerting = []
     for hit in hits:
         key = item_key(hit)
         prev = state.get(key)
-        alert = should_alert(hit, prev, now)
-        if alert:
+        reason = alert_reason(hit, prev, now, reads.get(hit.get("shop")))
+        if reason:
+            hit["alert_reason"] = reason
+            hit["previous_price"] = (prev or {}).get("last_alerted_price")
+            hit["last_seen_at"] = (prev or {}).get("last_seen_at")
             alerting.append(hit)
-        state = _update_state(state, hit, key, alert, now)
+        state = _update_state(state, hit, key, bool(reason), now)
+
+    for shop in shops_read:
+        reads[shop] = now.isoformat()
+    if reads:
+        meta["shops"] = reads
+        state[META_KEY] = meta
     return alerting, state
+
+
+def reason_phrase(hit):
+    """Why this row is in the email, in the reader's terms.
+
+    Three genuinely different pieces of news were rendered identically: a
+    bottle seen for the first time at EUR 60 read exactly like one that fell
+    from EUR 100 to EUR 60. The drop rule is the one this file argues hardest
+    for -- it deliberately ignores the cooldown -- and it was invisible in the
+    thing the reader actually receives.
+    """
+    reason = hit.get("alert_reason")
+    if reason == "drop":
+        was = hit.get("previous_price")
+        price = hit.get("price")
+        if was and price:
+            return f"down {(1 - price / was) * 100:.0f}% from EUR {was:.0f}"
+        return "price dropped"
+    if reason == "back":
+        since = hit.get("last_seen_at")
+        if since:
+            days = (datetime.now(timezone.utc) - _parse_iso(since)).days
+            return f"back in stock, gone {days} days"
+        return "back in stock"
+    if reason == "deal":
+        return "now a deal"
+    if reason == "new":
+        return "new listing"
+    return ""
 
 
 def format_row(hit):
@@ -182,8 +277,10 @@ def format_row(hit):
     # Where the reference came from is the difference between "cheaper than
     # three other shops" and "cheaper than a number someone guessed once".
     basis = hit.get("reference_basis") or "no reference"
+    why = reason_phrase(hit)
+    why = f"{why} | " if why else ""
     return (f"{status:<5} | {producer} | {cuvee} | {size} | {price} | {ref} | "
-            f"{basis} | {hit.get('url', '')}")
+            f"{why}{basis} | {hit.get('url', '')}")
 
 
 def recap_due(state, now, every_days=RECAP_DAYS):
@@ -359,7 +456,10 @@ def _hit_html(hit):
         money += f" vs EUR {ref:.0f} ref"
     size = _esc(hit.get("size_label") or f"{hit.get('size_ml', 750)}ml")
     shop = _esc(hit.get("shop", ""))
-    meta = " · ".join(x for x in (_esc(money), size, shop) if x)
+    # Why this row is here, first: a restock and a first sighting are
+    # different news and used to render identically.
+    why = _esc(reason_phrase(hit))
+    meta = " · ".join(x for x in (why, _esc(money), size, shop) if x)
 
     lines = [f'<div style="{_H["row"]}">{head}',
              f'<p style="{_H["meta"]}">{meta}</p>']
@@ -477,7 +577,7 @@ def write_hits_json(all_hits, path=None):
 
 
 def run_digest(all_hits, dry_run=False, state_path=None, hits_path=None,
-               notes=None, now=None, force=False, tables=None):
+               notes=None, now=None, force=False, tables=None, shops_read=()):
     """Full pipeline: decide alerts, write the full hit set to hits.json,
     send at most one email, and only then persist the cooldown state.
     Returns the list of alerting hits.
@@ -505,7 +605,7 @@ def run_digest(all_hits, dry_run=False, state_path=None, hits_path=None,
     """
     now = now or datetime.now(timezone.utc)
     state = load_state(state_path)
-    alerting, updated_state = select_alerts(all_hits, state, now)
+    alerting, updated_state = select_alerts(all_hits, state, now, shops_read)
     write_hits_json(all_hits, hits_path)
 
     # A line configured never to alert stays out of every email body, not just

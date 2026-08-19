@@ -1603,7 +1603,12 @@ def main():
     if not DRY_RUN:
         market.save_observations(store)
 
+    # Which shops we actually read, so a bottle missing from a shop we never
+    # reached is not announced as a restock when the shop comes back.
+    shops_read = {r["shop"] for r in coverage
+                  if r.get("status") in ("ok", "TRUNCATED")}
     notify.run_digest(evaluated, dry_run=DRY_RUN, force=FORCE_REPORT,
+                      shops_read=shops_read,
                       tables={"Shop coverage": table}, notes={
         "Shops that returned nothing": silent_shops,
         "Blocked by a bot challenge": blocked_shops,
