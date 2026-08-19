@@ -298,6 +298,7 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
         return []
 
     items, seen = [], set()
+    in_stock = _stock_reader(best)
     for block in best:
         anchor = _product_link(block)
         if anchor is None:
@@ -329,8 +330,7 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
             # Marked rather than dropped: the probe counts parsed products
             # to decide whether an adapter works, and a shop whose stock
             # happens to be sold out today must not read as broken.
-            "in_stock": not (OUT_OF_STOCK.search(_strip_accents(text))
-                             or markup_says_sold_out(block)),
+            "in_stock": in_stock(block),
         })
     return items
 
@@ -559,6 +559,52 @@ def markup_says_sold_out(block):
             if OUT_OF_STOCK_SCHEMA in (el.get(attr) or "").lower():
                 return True
     return False
+
+
+# A control the shop has disabled is the shop saying "not this one". Used
+# only to break a tie the text cannot: see _stock_reader.
+def _has_disabled_control(block):
+    return any(el.has_attr("disabled") for el in block.find_all(["button", "input"]))
+
+
+def _stock_reader(blocks):
+    """Return in_stock(block), deciding how this page states stock.
+
+    Normally the text decides: "epuise", "rupture de stock", "sold out".
+    leszinzinsduvin breaks that. Its theme ships "Produit épuisé" inside
+    *every* card and reveals it with CSS, so the text condemned the whole
+    shop -- 12 products, 0 in stock, every run -- while three of the four
+    cards in tests/fixtures/leszinzinsduvin-landing.html carry an enabled buy
+    button and only one is really gone. A sold-out match is never persisted,
+    so this failure suppresses finds instead of adding noise, which is to say
+    nothing would ever have reported it.
+
+    The buttons are believed only when the text has disqualified itself by
+    condemning every card *and* the markup distinguishes some cards from
+    others. Both halves matter: a category page really can be sold out from
+    top to bottom, and calling that page available would alert on bottles
+    nobody can buy and then write them to seen.json, silencing the restock
+    that is the point of watching them.
+    """
+    text_says, disabled = {}, {}
+    for block in blocks:
+        text_says[id(block)] = bool(
+            OUT_OF_STOCK.search(_strip_accents(block.get_text(" ", strip=True))))
+        disabled[id(block)] = _has_disabled_control(block)
+
+    trust_buttons = (
+        bool(blocks)
+        and all(text_says.values())
+        and 0 < sum(disabled.values()) < len(blocks))
+
+    def in_stock(block):
+        if markup_says_sold_out(block):
+            return False
+        if trust_buttons:
+            return not disabled[id(block)]
+        return not text_says[id(block)]
+
+    return in_stock
 
 
 NEXT_WORDS = {"next", "suivant", "suivante", "volgende", "weiter", "›", "»", "→", ">"}

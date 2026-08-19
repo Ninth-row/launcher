@@ -500,6 +500,17 @@ HTTP header or printed.
   agree or a producer added through the form matches nothing). Putting
   `match_key` in front of `market.VINTAGE_RE` turns "2018,50 €" into
   "2018 50" and a price becomes a vintage.
+- A sold-out marker in *every* card is decoration, not stock.
+  leszinzinsduvin's theme ships "Produit épuisé" inside all of them and
+  reveals it with CSS, so the text condemned the whole shop -- 12 products,
+  0 in stock, every run -- while three of the four cards in its capture have
+  an enabled buy button and one does not. `_stock_reader` believes the
+  buttons only when the text has disqualified itself by condemning every card
+  *and* the markup distinguishes some from others; both halves are required,
+  because a category page really can be sold out top to bottom and calling it
+  available alerts on bottles nobody can buy, then writes them to `seen.json`
+  and silences the restock. This failure suppresses finds rather than adding
+  noise, so nothing reports it: the shop simply looks quiet.
 - A listing that is sold out is not a find. Stock comes from the platform
   when it answers (`available` on a Shopify variant, `is_in_stock` on the
   WooCommerce Store API) and from the listing text otherwise ("epuise",

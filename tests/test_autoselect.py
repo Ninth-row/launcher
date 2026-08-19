@@ -1068,13 +1068,35 @@ def test_the_landing_page_is_read_as_well_as_the_grower_index():
     assert len(items) > 4, "the index added nothing to the landing page"
 
 
-def test_the_landing_page_new_arrivals_are_priced_and_marked_sold_out():
-    """All four currently read 'Produit épuisé' -- a sold-out match is
-    remembered rather than alerted, and that is what makes a restock read as
-    a new find."""
+def test_the_landing_page_new_arrivals_read_stock_from_the_buy_button():
+    """Reversed. This asserted that all four are sold out, which is what the
+    parser said and not what the page says.
+
+    Every card in this real capture contains the string "Produit épuisé" --
+    the theme ships it in all of them and reveals it with CSS -- but only
+    card 7175 carries `-outOfStock` and a disabled button; 7176, 7177 and
+    7178 have enabled ones. Reading the text alone reported the whole shop
+    sold out on every run, and a sold-out match is never alerted and never
+    persisted, so three real bottles a page were suppressed in a way nothing
+    could report."""
     items = find_at(LANDING, "https://www.leszinzinsduvin.com")
     assert len(items) == 4
     assert all(i["price"] for i in items)
+    assert [i["in_stock"] for i in items] == [False, True, True, True]
+
+
+def test_a_page_where_everything_is_really_sold_out_stays_sold_out():
+    """The buy-button rule needs the markup to distinguish some cards from
+    others. A category page genuinely sold out top to bottom says so in the
+    text and disables nothing -- calling it available would alert on bottles
+    nobody can buy and write them to seen.json, silencing the restock."""
+    cards = "".join(
+        f'<div class="card"><a href="/vin-{i}">Ganevat Cuvee {i}</a>'
+        f'<span>29,00 &euro;</span><span>Produit épuisé</span></div>'
+        for i in range(3))
+    items = find_at(f'<html><body><div class="grid">{cards}</div></body></html>',
+                    "https://shop.test")
+    assert len(items) == 3
     assert all(i["in_stock"] is False for i in items)
 
 
