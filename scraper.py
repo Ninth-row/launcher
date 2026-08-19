@@ -287,12 +287,6 @@ SHOPS = [
         "verified": True,
     },
     {
-        "name": "lespeauxdevins",
-        "platform": "shopify",
-        "url": "https://lespeauxdevins.com",
-        "verified": True,
-    },
-    {
         "name": "lacavedespapilles",
         "platform": "shopify",
         "url": "https://www.lacavedespapilles.com",
@@ -311,12 +305,6 @@ SHOPS = [
         "name": "whynat",
         "platform": "shopify",
         "url": "https://www.whynat.fr",
-        "verified": True,
-    },
-    {
-        "name": "vinibee",
-        "platform": "woocommerce",
-        "url": "https://www.vinibee.com",
         "verified": True,
     },
     {
@@ -371,16 +359,6 @@ SHOPS = [
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
         "verified": False,
-    },
-    {
-        "name": "vinovivo",
-        "platform": "html",
-        "url": "https://vinovivo.be",
-        "catalog_paths": ["shop", "http://vinovivo.be/shop", "portfolio_page/pack-rosato", "portfolio_page/olivier-boulin-jura-bourgogne"],
-        "item_selector": "div.product",
-        "title_selector": "h2.product-title",
-        "price_selector": "span.price",
-        "verified": True,
     },
     {
         "name": "zuiverwijnen",
@@ -1023,8 +1001,8 @@ def catalogue_starts(shop, now=None):
     sparkling-wine filter and nothing else. Check for the union first: winenot
     was read as six colour filters for months and its own menu links the six
     at once (/s/35/blanc-rouge-rose-...), which is one catalogue that states
-    its own size instead of six whose sum we compute. vinovivo and pangee
-    still need the list. Each entry may be a path or an absolute URL; urljoin
+    its own size instead of six whose sum we compute. pangee still needs
+    the list. Each entry may be a path or an absolute URL; urljoin
     passes an absolute URL through untouched.
 
     The list is rotated by the hour for the same reason `shop_order` rotates
@@ -1040,8 +1018,9 @@ def catalogue_starts(shop, now=None):
     if not paths:
         return [shop["url"]]
 
-    # The probe records a path and its absolute form as two entries ("shop"
-    # and "http://vinovivo.be/shop"), which is one catalogue and two requests.
+    # The probe can record a path and its absolute form as two entries
+    # ("shop" and "http://host/shop"), which is one catalogue and two
+    # requests. vinovivo carried exactly that pair before it was removed.
     starts, seen = [], set()
     for path in paths:
         url = urljoin(base, path)
@@ -1053,9 +1032,10 @@ def catalogue_starts(shop, now=None):
     # The first entry is the catalogue the probe measured as best, and it is
     # read every run: page 1 is where new arrivals land, and that is the news
     # this scraper exists for. Only the rest rotate -- the probe also records
-    # pages that merely parsed (pangee's "28-beaujolais", vinovivo's
-    # portfolio pages), and rotating those into first place would spend the
-    # shared page budget on a slice of the shop instead of the whole of it.
+    # pages that merely parsed (pangee's "28-beaujolais", and vinovivo's
+    # portfolio pages before that shop was removed), and rotating those into
+    # first place would spend the shared page budget on a slice of the shop
+    # instead of the whole of it.
     if len(starts) > 2:
         at = now or dt.datetime.now(dt.timezone.utc)
         rest = starts[1:]

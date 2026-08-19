@@ -342,7 +342,7 @@ def report(results):
     return lines
 
 
-def explain(url, crawler_client, find=None):
+def explain(url, crawler_client, find=None, min_blocks=None):
     """What the parser sees at one URL, line by line.
 
     Three separate questions this session ended in "I cannot see that page":
@@ -362,8 +362,14 @@ def explain(url, crawler_client, find=None):
     html = page.text
     soup = BeautifulSoup(html, "html.parser")
     nodes = autoselect._price_nodes(soup, scraper.PRICE_PATTERN)
+    # min_blocks mirrors the run: a shop read through its producer index is
+    # parsed with min_blocks=1, because one bottle on a grower's page is
+    # still that grower's bottle. Explaining such a page at the default 3
+    # reports "0 products parsed" for a page the run reads happily, which is
+    # the opposite of what this exists for.
     items = autoselect.find_products(
-        html, url, scraper.PRICE_PATTERN, scraper.parse_price)
+        html, url, scraper.PRICE_PATTERN, scraper.parse_price,
+        min_blocks=min_blocks)
     # Counted on the rendered text, not the raw markup: a shop that writes
     # &euro; or &#8364; has a price on the page and none in its source, and
     # reporting zero there is how a readable page reads as an empty one.
@@ -417,6 +423,10 @@ def main(argv=None):
                         help="Report what the parser sees at each --url "
                              "instead of assessing it as a candidate shop. "
                              "Keeps every URL, including several on one host.")
+    parser.add_argument("--min-blocks", type=int, default=None,
+                        help="With --explain, how many blocks a group needs "
+                             "to count as a grid (the run uses 1 when reading "
+                             "a shop through its producer index)")
     parser.add_argument("--find", default=None,
                         help="With --explain, say whether this text is in the "
                              "parsed products, the raw markup, or nowhere")
@@ -439,7 +449,7 @@ def main(argv=None):
             print("--explain needs at least one --url")
             return 1
         for url in candidates[:args.limit]:
-            for line in explain(url, client, args.find):
+            for line in explain(url, client, args.find, args.min_blocks):
                 print(line)
         return 0
 

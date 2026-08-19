@@ -32,6 +32,10 @@ on:
         description: "With explain: say whether this text is in the parsed products, the raw markup, or nowhere"
         type: string
         default: ""
+      min_blocks:
+        description: "With explain: how many blocks make a grid (the run uses 1 for a shop read through its producer index)"
+        type: string
+        default: ""
 
 jobs:
   discover:
@@ -60,6 +64,7 @@ jobs:
           LIMIT: ${{ inputs.limit || '20' }}
           EXPLAIN: ${{ (inputs.explain && '1') || '' }}
           FIND: ${{ inputs.find }}
+          MIN_BLOCKS: ${{ inputs.min_blocks }}
           # Absent, the web-search step is skipped rather than replaced by
           # scraping a results page. The key travels as a query parameter, so
           # discover.py redacts any URL it prints -- these run logs are public.
@@ -76,6 +81,7 @@ jobs:
           done
           if [ -n "$EXPLAIN" ]; then args+=(--explain); fi
           if [ -n "$FIND" ]; then args+=(--find "$FIND"); fi
+          if [ -n "$MIN_BLOCKS" ]; then args+=(--min-blocks "$MIN_BLOCKS"); fi
           IFS=',' read -ra people <<< "$PRODUCERS"
           for person in "${people[@]}"; do
             trimmed="$(echo "$person" | xargs)"

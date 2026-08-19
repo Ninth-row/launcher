@@ -204,9 +204,9 @@ shops added from research/guesswork rather than a real observed response
 --apply`, which fetches, parses and flags in a single run against a real
 response; never by hand.
 
-22 shops are currently verified and fetched on every run. Two of them,
-vinovivo and purovino, spent months listed here as "prices are rendered
-client-side" — and that verdict was wrong twice over. The price *was* in
+19 shops are currently verified and fetched on every run. Two shops since
+removed, vinovivo and purovino, spent months listed here as "prices are
+rendered client-side" — and that verdict was wrong twice over. The price *was* in
 their HTML; `autoselect._price_nodes` could not see it, because it accepted a
 price only when one element's own text held both the number and the currency
 marker, and both shops (like most WooCommerce and Squarespace themes) wrap
@@ -300,9 +300,11 @@ each challenge stayed true for six more runs. Such a shop now gets a `blocked`
 coverage row and a line in the digest. Do not try to get past a challenge: it
 is a shop saying no.
 
-Shops leave the list too. vinopura, volatilewines, purovino, biowijnclub and
-vinifine were removed on request; between them they were 726 products and no
-hits, and purovino had only just been made readable. Removing a shop is
+Shops leave the list too. vinopura, volatilewines, purovino, biowijnclub,
+vinifine, lespeauxdevins, vinibee and vinovivo were removed on request.
+Between them the first five were 726 products and no hits, and purovino had
+only just been made readable; the last three were 1320 products and two hits
+(vinibee's Richard Leroy) at 13 pages a run. Removing a shop is
 config, not archaeology -- the entry, its fixture and its captures go
 together, and git remembers the rest.
 
@@ -578,7 +580,7 @@ HTTP header or printed.
   only the rest. One page budget is shared across every `catalog_paths`
   entry, so a fixed order spent all of it on the first category -- winenot
   had never read its rosé, sparkling, moelleux or muté at any budget (it now
-  reads one union filter instead; vinovivo and pangee still carry lists).
+  reads one union filter instead; pangee still carries a list).
   Rotating everything is not the fix either: the probe also records pages
   that merely parsed (a portfolio page, a sub-category), and giving those
   first place spends the budget on a slice of the shop instead of the whole
