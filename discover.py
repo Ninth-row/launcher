@@ -380,12 +380,17 @@ def explain(url, crawler_client, find=None):
     producers = sorted({p for i in items
                         for p in scraper.match_producers(i["text"])})
     lines.append(f"    producers in the listing: {', '.join(producers) or '-'}")
-    for item in items[:5]:
+    # A listing page is a dozen or two cards; print all of them. Truncating at
+    # five hid the one row that mattered -- the page said "producers in the
+    # listing: Labet" and the Labet card was in the seven not shown.
+    shown = items if len(items) <= 30 else items[:30]
+    for item in shown:
         stock = "in stock" if item["in_stock"] else "SOLD OUT"
-        lines.append(f"      {str(item['price']):>8}  {item['title'][:46]!r}  "
-                     f"{stock}  {item['url']}")
-    if len(items) > 5:
-        lines.append(f"      ... and {len(items) - 5} more")
+        matched = ", ".join(scraper.match_producers(item["text"])) or "-"
+        lines.append(f"      {str(item['price']):>8}  {item['title'][:44]!r}  "
+                     f"{stock}  [{matched}]  {item['url']}")
+    if len(items) > len(shown):
+        lines.append(f"      ... and {len(items) - len(shown)} more")
     # The question is usually "is this bottle here at all", and the answer is
     # not in the parsed items when the parser is what is being doubted.
     if find:
