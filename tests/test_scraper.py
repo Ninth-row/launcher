@@ -543,6 +543,17 @@ def test_a_namesake_is_never_reported_as_a_producer_of_its_own():
     assert not set(scraper.NAMESAKES) & set(scraper.PRODUCERS)
 
 
+def test_a_grower_the_shops_spell_differently_is_still_matched():
+    """leszinzinsduvin's grower page reads "Romain Lowson et Ariane Stern".
+    Watching only "Lawson" reported him missing from every shop -- which
+    looks exactly like an alias typo, and was one, just not ours."""
+    assert scraper.match_producers(
+        "Romain Lowson et Ariane Stern se sont installes dans le Jura") \
+        == ["Romain Lawson"]
+    assert scraper.match_producers("Romain Lawson Chardonnay 2022") \
+        == ["Romain Lawson"]
+
+
 def test_bruyere_houillon_is_its_own_estate():
     assert scraper.match_producers("Bruyère houillon Savagnin") == ["Bruyere Houillon"]
 

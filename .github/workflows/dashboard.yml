@@ -33,6 +33,8 @@ jobs:
         run: python dashboard.py
 
       - name: Commit if changed
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
           if git diff --quiet -- wine.html; then
             echo "Dashboard already up to date."
@@ -42,4 +44,27 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add wine.html
           git commit -m "Rebuild dashboard [skip ci]"
-          git push
+
+          # Never rebase this one. The probe and apply-config both push to
+          # main and both rebuild this file, so a race is normal -- and a
+          # rebase of a generated file only ever produces a conflict whose
+          # correct resolution is "regenerate it". So: take theirs, rebuild
+          # on top, and if their copy is already current there was nothing
+          # to say. A probe run died on exactly this conflict.
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); rebuilding on the new head."
+            git fetch origin "$BRANCH" || exit 1
+            git reset --hard "origin/$BRANCH" || exit 1
+            python dashboard.py
+            if git diff --quiet -- wine.html; then
+              echo "Someone else already rebuilt it."
+              exit 0
+            fi
+            git add wine.html
+            git commit -m "Rebuild dashboard [skip ci]"
+          done
+          echo "Could not push after 3 attempts."
+          exit 1

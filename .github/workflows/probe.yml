@@ -123,7 +123,24 @@ jobs:
               exit 0
             fi
             echo "Push rejected (attempt $attempt); rebasing onto the branch head."
-            git pull --rebase origin "${{ github.ref_name }}" || exit 1
+            if ! git pull --rebase origin "${{ github.ref_name }}"; then
+              # wine.html is generated, so the only correct resolution is to
+              # regenerate it -- and the dashboard workflow rebuilds it on
+              # main after every push, so the two copies always differ. Probe
+              # run 32268240645 died exactly here, after it had already
+              # fetched and parsed, losing everything it had observed.
+              # Any *other* conflict is real and must still fail loudly.
+              conflicts="$(git diff --name-only --diff-filter=U)"
+              if [ "$conflicts" != "wine.html" ]; then
+                echo "Conflicts this cannot resolve: $conflicts"
+                git rebase --abort || true
+                exit 1
+              fi
+              echo "Regenerating wine.html to resolve the conflict."
+              python dashboard.py
+              git add wine.html
+              GIT_EDITOR=true git rebase --continue || exit 1
+            fi
             sleep $((attempt * 3))
           done
           echo "Could not push after 3 attempts."

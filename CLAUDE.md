@@ -635,6 +635,14 @@ HTTP header or printed.
   on a file whose correct resolution is always "regenerate it". Two merges
   stopped on exactly that. No test reads the file from disk -- they render
   through `dashboard.render()` -- so a branch never needs it current.
+- Three workflows push to `main` and two of them rebuild `wine.html`, so a
+  race on that file is normal -- and it is generated, so the only correct
+  resolution is to regenerate it. Probe run 32268240645 died on exactly that
+  conflict during its retry rebase, *after* it had fetched and parsed, losing
+  everything it had observed. `probe.yml` now regenerates and continues when
+  `wine.html` is the only conflicted file, and fails loudly on any other;
+  `dashboard.yml` never rebases at all -- it resets to the new head, rebuilds
+  on top, and exits quietly if someone else already did.
 - A workflow input never reaches a shell command line. It goes through
   `env:` and is read as a quoted variable -- `"$ONLY"`, never
   `--only ${{ inputs.only }}`. A probe dispatched with "Lapangee,

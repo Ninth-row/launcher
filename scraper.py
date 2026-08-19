@@ -190,7 +190,11 @@ PRODUCERS = {
     "Tom Gauditiabois": ["tom gauditiabois", "gauditiabois"],
     "Richard Leroy": ["richard leroy", "leroy richard"],
     "Lattard": ["lattard"],
-    "Romain Lawson": ["romain lawson"],
+    # Both spellings. leszinzinsduvin's own grower page writes "Romain Lowson
+    # et Ariane Stern", so watching only the "Lawson" spelling matched
+    # nothing anywhere and reported him missing from every shop -- which
+    # reads as an alias typo and was one, just not ours.
+    "Romain Lawson": ["romain lawson", "romain lowson"],
     "Antoine Robles": ["robles"],
     "William Kelley": ["william kelley"],
     "Gilbert Gillet": ["gilbert gillet"],
