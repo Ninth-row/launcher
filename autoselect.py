@@ -26,7 +26,7 @@ it doesn't -- `find_products` returns an empty list rather than guessing,
 which the caller reports as a shop needing real selectors.
 """
 import re
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 import textnorm
@@ -705,11 +705,50 @@ def find_next_page(html, current_url):
     return None
 
 
+# Which query parameter carries the page number. Compared by name because a
+# pager that echoes itself does so in whatever parameter its platform uses.
+PAGE_PARAMS = ("page", "paged", "p")
+
+
+def _page_number(query):
+    for key in PAGE_PARAMS:
+        if query.get(key):
+            return query[key][-1]
+    return None
+
+
+def _same_page(candidate, current):
+    """Is this "next" link the page we are already on, spelled differently?
+
+    winenot's last page links itself: on ?page=36 the rel="next" is
+    ?page=36&order=product.name.asc. As strings those differ, so the walk
+    fetched page 36 twice -- once per catalogue, every run -- and only stopped
+    because the second copy held nothing new. The page number is what says
+    which page this is; a sort the site was already applying does not.
+    """
+    a, b = urlparse(candidate), urlparse(current)
+    if (a.scheme, a.netloc, a.path.rstrip("/")) != (b.scheme, b.netloc,
+                                                    b.path.rstrip("/")):
+        return False
+    qa, qb = parse_qs(a.query), parse_qs(b.query)
+    here, there = _page_number(qb), _page_number(qa)
+    if here is not None and there is not None:
+        return here == there
+    if here is None and there is None:
+        # Neither numbers itself, so only the rest of the query can differ --
+        # and a link to the same path with the same query is the page we are on.
+        return qa == qb
+    # Only one side numbers itself. An unnumbered URL is page one, so
+    # /s/1/blanc -> ?page=1&order=... is still page one; anything else is a
+    # page we have not read.
+    return (here if there is None else there) in ("1", "01")
+
+
 def _distinct(candidate, current):
     """A "next" link that points at the page we are on is a dead end, and
     following it would loop until the page budget ran out."""
-    if candidate.rstrip("/") == current.rstrip("/"):
-        return None
     if not urlparse(candidate).scheme.startswith("http"):
+        return None
+    if _same_page(candidate, current):
         return None
     return candidate

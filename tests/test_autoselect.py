@@ -168,6 +168,38 @@ def test_a_next_link_pointing_at_the_current_page_is_not_followed():
     assert autoselect.find_next_page(html, BASE) is None
 
 
+def test_the_last_page_linking_itself_with_a_sort_is_not_a_next_page():
+    """winenot's real last page, and a wasted request per catalogue per run.
+
+    On https://winenot.fr/s/1/blanc?page=36 the rel="next" is
+    ?page=36&order=product.name.asc -- the same page with the sort the site
+    was already applying spelled out. As strings the two differ, so the walk
+    fetched page 36 a second time before the duplicate URLs stopped it.
+    """
+    current = "https://winenot.fr/s/1/blanc?page=36"
+    html = ('<html><body><a rel="next" '
+            'href="/s/1/blanc?page=36&amp;order=product.name.asc">36</a>'
+            '</body></html>')
+    assert autoselect.find_next_page(html, current) is None
+
+
+def test_page_one_linking_itself_as_page_one_is_not_a_next_page():
+    """An unnumbered catalogue URL is page one, so ?page=1 is where we are."""
+    html = ('<html><body><a rel="next" '
+            'href="/s/1/blanc?page=1&amp;order=product.name.asc">1</a>'
+            '</body></html>')
+    assert autoselect.find_next_page(html, "https://winenot.fr/s/1/blanc") is None
+
+
+def test_a_real_next_page_is_still_followed_when_it_carries_a_sort():
+    """The guard is about the page number, not about extra parameters."""
+    html = ('<html><body><a rel="next" '
+            'href="/s/1/blanc?page=36&amp;order=product.name.asc">36</a>'
+            '</body></html>')
+    assert autoselect.find_next_page(html, "https://winenot.fr/s/1/blanc?page=35") \
+        == "https://winenot.fr/s/1/blanc?page=36&order=product.name.asc"
+
+
 def test_no_next_link_means_the_last_page():
     assert autoselect.find_next_page("<html><body><p>fin</p></body></html>", BASE) is None
 

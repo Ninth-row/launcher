@@ -240,15 +240,18 @@ SHOPS = [
         # Its region categories (/12-alsace, /19-jura, ...) carry no products:
         # 456KB of HTML with 21 prices and five product links, so the grid is
         # rendered client-side. The routes that do parse are its colour and
-        # type filters, and six of them cover the catalogue. Probe run
-        # 30946131912 established that -- see probe_pages/capture.winenot-fr.*.
+        # type filters (pm_advancedsearch4 SEO pages), and its own menu
+        # publishes the *union* of the six as one filter -- 1236 wines over
+        # 103 pages, where walking the six separately read 1229 over 105:
+        # seven wines carry two colours and the URL dedupe dropped them, and
+        # the count could only ever be compared against a sum we computed
+        # ourselves, so the coverage row could state no fraction. One
+        # catalogue states its own size, so it can. Spirits, whiskies and BIB
+        # sit outside it, which is what we want.
         "name": "winenot",
         "platform": "html",
         "url": "https://winenot.fr",
-        "catalog_paths": [
-            "s/2/rouge", "s/1/blanc", "s/5/rose",
-            "s/3/vin-effervescent", "s/4/vin-moelleux", "s/34/vin-mute",
-        ],
+        "catalog_path": "s/35/blanc-rouge-rose-vin-effervescent-vin-moelleux-vin-mute",
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
@@ -1014,11 +1017,14 @@ def _fetch_via_producer_index(shop, index_html, index_url, crawler_client):
 def catalogue_starts(shop, now=None):
     """Where to begin reading this shop's catalogue, and in what order.
 
-    `catalog_paths` (a list) exists because winenot.fr and vinnouveau.fr keep
-    their wines under region categories -- /12-alsace, /19-jura, /21-loire --
-    with no "all wines" page, so one path can only ever read one region. That
-    is how winenot came to be configured to read its sparkling-wine filter
-    and nothing else. Each entry may be a path or an absolute URL; urljoin
+    `catalog_paths` (a list) exists because a shop can keep its wines under
+    categories with no "all wines" page, so one path can only ever read one
+    of them -- that is how winenot came to be configured to read its
+    sparkling-wine filter and nothing else. Check for the union first: winenot
+    was read as six colour filters for months and its own menu links the six
+    at once (/s/35/blanc-rouge-rose-...), which is one catalogue that states
+    its own size instead of six whose sum we compute. vinovivo and pangee
+    still need the list. Each entry may be a path or an absolute URL; urljoin
     passes an absolute URL through untouched.
 
     The list is rotated by the hour for the same reason `shop_order` rotates
