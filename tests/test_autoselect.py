@@ -525,6 +525,109 @@ def test_a_shop_whose_only_catalogue_is_a_query_url_keeps_it():
     assert any("controller=category" in u for u in found)
 
 
+# --- stock, and how we know ---------------------------------------------------
+
+def test_winenot_marks_a_sold_out_bottle_with_a_disabled_buy_button():
+    """The reported bug, from the shop's own catalogue page.
+
+    winenot's PrestaShop theme stamps schema.org/InStock into every card and
+    leaves product-flags empty even on a bottle nobody can buy: the disabled
+    add-to-cart is the only truthful statement on the card. The button rule
+    used to require the card *text* to have condemned every card first --
+    written for leszinzinsduvin -- and winenot's text says nothing at all, so
+    all 1228 of its listings read as buyable, every run.
+    """
+    html = (pathlib.Path(__file__).parent / "fixtures"
+            / "winenot.html").read_text(encoding="utf-8", errors="replace")
+    items = find_at(html, "https://winenot.fr")
+
+    sold_out = [i for i in items if not i["in_stock"]]
+    assert len(items) == 12
+    assert [i["url"] for i in sold_out] == [
+        "https://winenot.fr/champagne/3880-blanc-de-noirs.html"]
+    # The load-bearing half: that card claims InStock and is sold out anyway.
+    assert "schema.org/InStock" in html
+
+
+def test_schema_org_in_stock_is_never_evidence_of_stock():
+    """A claim, not a fact -- winenot makes it on every card it serves."""
+    card = ('<div class="card"><a href="/vin-{i}">Ganevat Cuvee {i}</a>'
+            '<link itemprop="availability" href="https://schema.org/InStock"/>'
+            '<span>29,00 &euro;</span>'
+            '<button data-button-action="add-to-cart" {dis}>panier</button></div>')
+    html = ("<html><body><div class='grid'>"
+            + card.format(i=0, dis="disabled")
+            + "".join(card.format(i=i, dis="") for i in (1, 2))
+            + "</div></body></html>")
+    items = find_at(html, "https://shop.test")
+    assert [i["in_stock"] for i in items] == [False, True, True]
+
+
+def test_a_shop_that_states_nothing_about_stock_says_so():
+    """"In stock" from silence is what put a sold-out bottle in a digest."""
+    cards = "".join(
+        f'<div class="card"><a href="/vin-{i}">Ganevat Cuvee {i}</a>'
+        f'<span>29,00 &euro;</span></div>' for i in range(3))
+    items = find_at(f"<html><body><div class='grid'>{cards}</div></body></html>",
+                    "https://shop.test")
+    assert {i["stock_basis"] for i in items} == {"none"}
+
+
+def test_a_disabled_filter_input_is_not_a_sold_out_bottle():
+    """cavepurjus ships `<input type=hidden name=orderby disabled>` in a
+    filter form. Reading that as stock would suppress a real bottle."""
+    cards = "".join(
+        f'<div class="card"><a href="/vin-{i}">Ganevat Cuvee {i}</a>'
+        f'<span>29,00 &euro;</span>'
+        f'<input type="hidden" name="orderby" {"disabled" if i == 0 else ""}/>'
+        f'</div>' for i in range(3))
+    items = find_at(f"<html><body><div class='grid'>{cards}</div></body></html>",
+                    "https://shop.test")
+    assert all(i["in_stock"] for i in items)
+
+
+def test_out_of_stock_stated_as_a_content_attribute_is_read():
+    """PrestaShop 1.7 writes <meta itemprop="availability" content="OutOfStock">
+    where 1.6 writes an href. Scanning for the full schema.org URL missed
+    every 1.7 shop -- vinnouveau's sold-out cards were caught only by the
+    French words beside them, and a restyle would have taken it silently to
+    zero sold out."""
+    card = ('<div class="card"><a href="/vin-{i}">Ganevat Cuvee {i}</a>'
+            '<span>29,00 &euro;</span>{avail}</div>')
+    html = ("<html><body><div class='grid'>"
+            + card.format(i=0, avail='<meta itemprop="availability" content="OutOfStock"/>')
+            + "".join(card.format(i=i, avail="") for i in (1, 2))
+            + "</div></body></html>")
+    assert [i["in_stock"] for i in find_at(html, "https://shop.test")] == [False, True, True]
+
+
+# --- the price you would actually pay ----------------------------------------
+
+def test_a_discounted_card_records_the_new_price_not_the_old_one():
+    """pangee's real cards, 9 of 36 discounted. PrestaShop renders the old
+    price first, so the first currency-adjacent number in the card is the one
+    crossed out -- and a discount is exactly the news this scraper exists to
+    send, so a real DEAL was reported FAIR and never alerted."""
+    html = (pathlib.Path(__file__).parent / "fixtures"
+            / "pangee.html").read_text(encoding="utf-8", errors="replace")
+    items = find_at(html, "https://la-pangee.com")
+    lucy = next(i for i in items if "Out of Control" in i["title"])
+    assert lucy["price"] == 12.15
+
+
+def test_the_discount_amount_is_never_taken_as_the_price():
+    """"729,90 € -40,00 € 689,90 €" priced at 40 would be a worse lie than
+    the one being fixed, which is why this is not "the smallest number"."""
+    html = ('<html><body><div class="grid">'
+            + "".join('<div class="card"><a href="/pack-%d">Selosse pack</a>'
+                      '<span class="regular-price">729,90 &euro;</span>'
+                      '<span class="discount-amount">-40,00 &euro;</span>'
+                      '<span class="price">689,90 &euro;</span></div>' % i
+                      for i in range(3))
+            + '</div></body></html>')
+    assert {i["price"] for i in find_at(html, "https://shop.test")} == {689.90}
+
+
 # --- a filter is not a listing -----------------------------------------------
 
 def test_a_price_filter_slider_is_not_a_product():

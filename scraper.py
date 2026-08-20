@@ -766,12 +766,29 @@ def near_misses(unseen, corpus, producers=None):
 #
 # A genuine EUR 2018 bottle written "2018 €" is lost to this. That is the
 # trade this codebase makes everywhere: no number beats a confident wrong one.
+#
+# Thousands separators are part of the number, not a boundary. Written
+# `1 600,00 €` with a non-breaking space -- which is how PrestaShop renders
+# every four-figure price, and pangee really does list a Selosse pack that
+# way -- the old pattern started matching at the `600` and recorded a
+# EUR 1600 bottle as **EUR 600**. The error only ever points downwards, which
+# is to say towards DEAL, and it lands on the dearest bottles in the
+# watchlist: the Roumier crus, the Overnoy magnums, Vignes de Mon Pere. Worse
+# than the one wrong verdict, that number entered observations.json and was
+# every other shop's reference for 180 days.
+GROUPED = r"\d{1,3}(?:[\s\u00a0\u202f.]\d{3})+(?:[.,]\d{2})?"
+PLAIN = r"\d{1,4}(?:[.,]\d{2})?"
 PRICE_PATTERN = re.compile(
-    r"(?:[€$£]\s?(\d{1,4}(?:[.,]\d{2})?))"
-    r"|(?:(?<![\d.,])(?!(?:19|20)\d{2}(?![.,]\d))"
-    r"(\d{1,4}(?:[.,]\d{2})?)\s?(?=€|EUR|USD|\$))",
+    rf"(?:[€$£]\s?({GROUPED}|{PLAIN}))"
+    rf"|(?:(?<![\d.,])(?!(?:19|20)\d{{2}}(?![.,]\d))"
+    rf"({GROUPED}|{PLAIN})\s?(?=€|EUR|USD|\$))",
     re.IGNORECASE,
 )
+# The lowest genuine price across every committed fixture is EUR 7.20, and
+# pdflist has enforced a floor for exactly this reason since it was written.
+# A sub-EUR-4 "bottle" is a parse artefact -- `€1 250,00` read as 1.00 --
+# and a 1.00 reference makes every honest listing of that wine a HIGH.
+MIN_CREDIBLE_PRICE = 4.0
 
 
 def positive_price(value):
@@ -782,7 +799,7 @@ def positive_price(value):
     below every reference there will ever be, so such a row scores DEAL for
     ever. One live dry run put exactly that in the digest.
     """
-    return value if value and value > 0 else None
+    return value if value and value >= MIN_CREDIBLE_PRICE else None
 
 
 def parse_price(text):
@@ -790,7 +807,15 @@ def parse_price(text):
     if not match:
         return None
     raw = match.group(1) or match.group(2)
-    return positive_price(float(raw.replace(",", ".")))
+    # Strip the grouping separators, then treat the last comma as the decimal
+    # point: "1 600,00" is one thousand six hundred, and "1.250,00" groups
+    # with a dot the way half of Europe writes it.
+    raw = re.sub(r"[\s\u00a0\u202f]", "", raw)
+    if "," in raw:
+        raw = raw.replace(".", "").replace(",", ".")
+    elif raw.count(".") > 1 or re.search(r"\.\d{3}$", raw):
+        raw = raw.replace(".", "")
+    return positive_price(float(raw))
 
 
 def _paged(shop, crawler_client, url, params_for_page, page_size, extract):

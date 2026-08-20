@@ -116,6 +116,37 @@ def test_alias_matching_is_accent_and_case_insensitive(monkeypatch):
     assert scraper.match_producers("zzz éstate chardonnay") == ["Zzz Éstate"]
 
 
+@pytest.mark.parametrize("text,expected", [
+    # The two real separators, both from committed captures: PrestaShop
+    # renders every four-figure price this way, and pangee lists a Selosse
+    # pack at 1 600,00 EUR.
+    ("1\u00a0600,00 \u20ac", 1600.0),
+    ("3\u202f259,00 \u20ac", 3259.0),
+    ("1 250,00 \u20ac", 1250.0),
+    ("\u20ac1 250,00", 1250.0),
+    ("1.250,00 \u20ac", 1250.0),          # dot grouping, half of Europe
+    ("9 999,00 \u20ac", 9999.0),
+    ("45,00 \u20ac", 45.0),               # and the ordinary case, unchanged
+    ("12,50 \u20ac", 12.5),
+])
+def test_a_thousands_separator_is_part_of_the_number(text, expected):
+    """A EUR 1600 bottle was recorded as EUR 600: the pattern started
+    matching at the 600. The error only ever points downwards -- towards
+    DEAL -- and it lands on the dearest bottles in the watchlist. Worse than
+    the wrong verdict, that number was every other shop's reference for the
+    180 days an observation lives."""
+    assert scraper.parse_price(text) == expected
+
+
+def test_a_price_below_a_credible_bottle_is_not_a_price():
+    """`EUR 1 250,00` once read as 1.00, and a 1.00 reference makes every
+    honest listing of that wine a HIGH. pdflist has had this floor since it
+    was written."""
+    assert scraper.parse_price("1,50 \u20ac") is None
+    assert scraper.parse_price("0,00 EUR") is None
+    assert scraper.parse_price("7,20 \u20ac") == 7.20
+
+
 def test_price_parser_ignores_bare_vintage_year():
     assert scraper.parse_price("2018 Domaine Ganevat Chardonnay") is None
     assert scraper.parse_price("Domaine Ganevat 2018 - 45,00€") == pytest.approx(45.00)

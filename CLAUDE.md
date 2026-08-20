@@ -335,6 +335,38 @@ HTTP header or printed.
   "Corse", "Loire" or "Bourgogne" while the img alt read "Clos Canarelli,
   Tara Di Sognu 2024 Rouge 75cl". A candidate of one word is taken only when
   nothing longer is offered -- a bottle is at least a grower and a cuvee.
+- The buy button is a stock statement, and on some shops the only true one.
+  winenot's PrestaShop theme stamps `schema.org/InStock` into every card and
+  leaves `product-flags` empty on a bottle nobody can buy, so its 1228
+  listings all read as buyable -- including
+  `winenot.fr/jura/3676-ploussard.html`, sold out for days, whose own
+  `data-product` island says `quantity: 0`. A disabled add-to-cart decides
+  whenever the page disables *some* and not all; that "some and not others"
+  is the whole guard, because a control disabled on every card is furniture.
+  The buy control is matched narrowly (`_is_cart_control`) -- cavepurjus
+  ships a disabled hidden `orderby` input in a filter form, and reading that
+  as stock suppresses a real bottle.
+- `schema.org/InStock` is a claim, never evidence. Availability is read as a
+  *value* (`href` or `content`, 1.6 and 1.7 spell it differently) and only
+  ever believed when it says out of stock -- the same asymmetry
+  `markup_says_sold_out` already documents. vinnouveau's sold-out cards were
+  held up by the French words beside them alone, and a restyle would have
+  taken that shop silently to zero.
+- The price is the one you would pay. PrestaShop renders a discounted card
+  old-price-first ("Prix de base 13,50 € -10% Prix 12,15 €"), so taking the
+  first currency-adjacent number recorded 13,50 -- 9 of pangee's 36 committed
+  cards, and every card on both shops' promotions pages. A discount is
+  exactly the news this scraper exists to send, so the defect reported a real
+  DEAL as FAIR *and* fed the inflated figure to every other shop as their
+  reference. Struck-through and "base" nodes are removed before parsing;
+  never take the smallest number instead -- "729,90 € -40,00 € 689,90 €"
+  would then be priced at the discount.
+- A thousands separator is part of the number. `1 600,00 €` with a
+  non-breaking space -- how PrestaShop writes every four-figure price -- was
+  read as **600**, always downwards, always towards DEAL, and always on the
+  dearest bottles watched. `MIN_CREDIBLE_PRICE` is the floor `pdflist` has
+  always had: `€1 250,00` once parsed as 1.00, and a 1.00 reference makes
+  every honest listing of that wine a HIGH for 180 days.
 - A zero is not a price. Cart widgets ("Voir mon panier -- 0,00 EUR"), gift
   cards and "price on request" all carry a currency-adjacent zero, and zero
   is below every reference there will ever be, so such a row is a permanent
