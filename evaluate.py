@@ -293,6 +293,17 @@ def evaluate_hit(hit, pricebook, market_store=None, aliases=None):
         reference_price = observed["price"]
         basis, basis_confidence = observed["basis"], observed["confidence"]
         reference_verified = observed["confidence"] == "high"
+        # A reference drawn from the same cuvee elsewhere already contains
+        # the cru: it *is* a Bonnes-Mares price. Multiplying it by the
+        # grand-cru factor again valued a EUR 1100 bottle at EUR 4950, so the
+        # identical wine EUR 100 dearer than our only comparison came out
+        # DEAL. Fires deterministically the moment two shops list the same
+        # Burgundy cru -- and every burgundy producer watched is unverified,
+        # so the observed figure is always the one used. A producer-level
+        # reference (the line median, or a hand-entered figure) is the case
+        # the multiplier was written for, and keeps it.
+        if observed.get("level") == "cuvee":
+            tier_multiplier = 1.0
     elif manual_price is not None:
         reference_price, basis, basis_confidence = manual_price, "unverified placeholder", "low"
 
