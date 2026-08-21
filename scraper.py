@@ -1691,6 +1691,17 @@ def main():
     # reached is not announced as a restock when the shop comes back.
     shops_read = {r["shop"] for r in coverage
                   if r.get("status") in ("ok", "TRUNCATED")}
+    # A cuvee the pricebook could not place sits in a band by default, and a
+    # default band is a guess: it is how a negoce bottle at a negoce price
+    # reads as a domaine bargain. Flipping the default the other way silences
+    # real bottles instead, so the band stays and the guess is named -- which
+    # is also the only mechanism by which the curated cuvee lists ever get
+    # completed.
+    unplaced = sorted({
+        f"{h.get('producer')}: {(h.get('cuvee') or h.get('title') or '')[:60]}"
+        for h in evaluated
+        if h.get("line_basis") == "default for this producer"})
+
     notes = {
         "Shops that returned nothing": silent_shops,
         "Blocked by a bot challenge": blocked_shops,
@@ -1698,6 +1709,7 @@ def main():
         unseen_title: unseen,
         "Shops not reached this run": [s["name"] for s in unreached],
         "Reference pool": lost_pool,
+        "Cuvees priced by a default band, needing a line": unplaced,
         "Alias near-misses": misses,
     }
     # Before the email, so the run's own page carries the result even when the

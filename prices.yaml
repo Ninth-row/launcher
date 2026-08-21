@@ -26,6 +26,13 @@ producers:
   last_verified: null
   verified: false
   lines:
+    # Stays `domaine`, deliberately, against the argument for flipping it.
+    # The curated domaine list holds 12 cuvees and he bottles more, so an
+    # unplaced label is sometimes a real domaine bottle. Flipping the default
+    # to negoce_unclassified silences those, and a silenced find cannot be
+    # recovered, where a wrong band is noise the reader can see through.
+    # The visibility problem the flip was meant to solve is solved instead by
+    # naming unplaced cuvees in the digest, so the list converges.
     default: domaine
     negoce_marks:
     - anne
