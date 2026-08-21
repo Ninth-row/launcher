@@ -160,7 +160,6 @@ def _came_back(prev, now, shop_last_read):
 
 def _update_state(state, hit, key, alerted, now):
     entry = dict(state.get(key, {}))
-    entry["last_price"] = hit.get("price")
     # Presence, stamped for every in-stock hit whether it alerted or not.
     # Absence is never recorded -- a sold-out listing does not reach here at
     # all -- so this stays inside the rule that nothing about a sold-out
@@ -185,8 +184,8 @@ def _hold_back(updated, previous, held):
 
     The previous entry is restored wholesale, including deleting a key that
     was not there before. Leaving a half-entry behind is worse than either:
-    with a `last_price` but no `last_alerted_at` the hit is no longer new, is
-    past no cooldown, and can only re-alert by turning into a DEAL -- so a
+    with a `last_seen_at` but no `last_alerted_at` the hit is no longer new,
+    is past no cooldown, and can only re-alert by turning into a DEAL -- so a
     held-back FAIR or NOREF would never be reported at all.
     """
     for hit in held:
@@ -200,8 +199,11 @@ def _hold_back(updated, previous, held):
 
 def select_alerts(hits, state=None, now=None, shops_read=()):
     """Decide which hits are alert-worthy this run, and return the updated
-    state. last_price and last_seen_at are refreshed for every hit seen,
-    alerted or not, so drop and absence comparisons stay accurate.
+    state. last_seen_at is refreshed for every hit seen, alerted or not, so a
+    return from absence is measured from when the bottle was last on a shelf.
+    A price drop is measured against last_alerted_price, which only an alert
+    writes -- that is what makes a decline alert once per further -10% step
+    rather than on every wobble.
 
     `shops_read` names the shops this run actually read. Their previous read
     times are taken *before* being restamped, because that is what tells a
@@ -639,7 +641,8 @@ def run_digest(all_hits, dry_run=False, state_path=None, hits_path=None,
         subject = subject_for(RECAP_SUBJECT, reportable)
     else:
         # Nothing was alerted, so nothing is being silenced; persisting here
-        # just refreshes last_price for future drop comparisons.
+        # just refreshes last_seen_at, so a bottle still on the shelf is not
+        # later read as having come back from an absence.
         if not dry_run:
             save_state(updated_state, state_path)
         print("No newly alert-worthy hits this run (cooldown or no change) -- silent run is valid.")
