@@ -2,24 +2,24 @@
 
 ## Verdict
 
-Green and materially more truthful than last night, confirmed on live data.
-winenot reported 1228 listings in stock and 0 sold out on every run before
-tonight; the dry run at 22:46 reports 1189 in stock and 32 sold out, and
-Overnoy/Houillon at winenot has moved from a reported find to correctly sold
-out everywhere. That is the reported bug, fixed, at zero request cost. Five defects fixed, all
-of which were producing wrong output rather than no output: a shop reporting
-its entire catalogue as buyable, discounted wines recorded at their
-pre-discount price, four figure prices read as three, a Burgundy cru priced
-against itself with the cru premium applied twice, and two spellings of one
-grape treated as two wines. 729 tests pass and the fixture gate passes on six
-checks. The live end to end dry run was still crawling when this was
-written; it is a cold pass, which in this window takes up to 28 minutes. If
-it reports an unhandled exception I will revert the change that caused it and
-say so here. No new dependency, no new request, no
-change to the alert rules that decide what reaches you.
+Green, and materially more truthful than last night on live data.
 
-The reported bottle, winenot.fr/jura/3676-ploussard.html, was the visible
-edge of the first defect. It is fixed at zero request cost.
+The bottle you reported is the visible edge of a shop wide defect, and it is
+fixed at zero request cost. winenot reported 1228 listings in stock and 0
+sold out on every run before tonight. The dry run at 22:46 reports 1189 in
+stock and 32 sold out, and Overnoy/Houillon at winenot has moved from a
+reported find to correctly sold out everywhere.
+
+Five defects fixed in total, every one of them producing wrong output rather
+than no output: a shop reporting its entire catalogue as buyable, discounted
+wines recorded at their pre-discount price, four figure prices read as three,
+a Burgundy cru priced against itself with the cru premium applied twice, and
+two spellings of one grape treated as two wines.
+
+729 tests pass, the fixture gate passes on all six checks, and the live end
+to end dry run completed with no unhandled exception: 19 shops, 17301
+listings, 132 hits, 20m21s. No new dependency, no new request, and no change
+to the rules that decide what reaches your inbox.
 
 ## Survey
 
