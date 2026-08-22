@@ -2,7 +2,11 @@
 
 ## Verdict
 
-Green and materially more truthful than last night. Five defects fixed, all
+Green and materially more truthful than last night, confirmed on live data.
+winenot reported 1228 listings in stock and 0 sold out on every run before
+tonight; the dry run at 22:46 reports 1189 in stock and 32 sold out, and
+Overnoy/Houillon at winenot has moved from a reported find to correctly sold
+out everywhere. That is the reported bug, fixed, at zero request cost. Five defects fixed, all
 of which were producing wrong output rather than no output: a shop reporting
 its entire catalogue as buyable, discounted wines recorded at their
 pre-discount price, four figure prices read as three, a Burgundy cru priced
@@ -50,6 +54,9 @@ lacaveduchateau, vinnaturel, leszinzinsduvin.
 ## Shipped
 
 [IMPROVE] Stock read from the buy button, and availability read as a value.
+Live evidence first: winenot went from 1228 in stock and 0 sold out to 1189
+and 32, and its hit count fell from 19 to 18 because one of those hits was a
+bottle nobody could buy.
 winenot's theme stamps schema.org/InStock into every card and leaves the
 product flags empty even on a bottle nobody can buy, so the disabled add to
 cart button is the only truthful statement on the card. The button rule
@@ -90,9 +97,19 @@ for a lieu dit at nearly three times the price; they are now distinct.
 
 [IMPROVE] Cuvees priced by a default band are named in the digest. A Ganevat
 cuvee the pricebook cannot place is scored against the domaine band, which is
-how a negoce bottle at a negoce price reads as a bargain.
+how a negoce bottle at a negoce price reads as a bargain. The live run names
+43 of them, which is the size of the guess that was invisible until tonight:
+Vin Jaune, Chateau Chalon, Vieux Macvin, Les Chonchons, Sul Q, Mon Rouge and
+the rest. Each one classified against a band nobody chose for it.
 
 [DELETE] seen.json's last_price, plus three comments that lied about it.
+
+One further live effect worth recording, from last night's namesake change
+rather than tonight's: Roumier has moved out of lavinoterie's producer list
+and into watched but found nowhere. The Roumier that shop stocks is a
+Burgundy namesake, not Christophe's domaine, so the shop was never a source
+for the estate we watch. That ambiguity was open in yesterday's notes and is
+now closed.
 
 ## Killed
 
