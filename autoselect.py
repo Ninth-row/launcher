@@ -25,6 +25,7 @@ This gives a shop adapter for free when it works, and nothing at all when
 it doesn't -- `find_products` returns an empty list rather than guessing,
 which the caller reports as a shop needing real selectors.
 """
+import copy
 import re
 from urllib.parse import parse_qs, urljoin, urlparse
 
@@ -198,6 +199,43 @@ def _block_for(node, price_pattern):
     return widest
 
 
+# The price you would pay, not the one crossed out beside it. PrestaShop
+# renders a discounted card as "Prix de base 13,50 € -10% Prix 12,15 €" --
+# old price first -- so taking the first currency-adjacent number in the card
+# recorded 13,50. Measured on the committed fixtures: 9 of pangee's 36 cards
+# and every card on both shops' /promotions pages, always over-stated.
+#
+# The cost is doubled by what a discount *is*: it is precisely the news this
+# scraper exists to send, so a real DEAL was reported FAIR and never alerted,
+# while the inflated figure went into observations.json as the reference
+# other shops are judged against.
+STRUCK_THROUGH = ("regular-price", "regular_price", "old-price", "old_price",
+                  "base-price", "price-base", "prix-base", "was-price",
+                  "compare-at", "compare_at", "barre", "habituel",
+                  "discount-percentage", "discount-amount", "product-discount")
+
+
+def _payable_text(block, fallback):
+    """`block`'s text with any struck-through or "base" price removed.
+
+    Falls back to the whole text when that leaves nothing priced: a theme
+    that calls its *current* price something like `price--base` must not lose
+    its price entirely. Never "the smallest number in the card" -- a card
+    reading "729,90 € -40,00 € 689,90 €" would then be priced at the
+    discount, which is a worse lie than the one being fixed.
+    """
+    trimmed = copy.copy(block)
+    for el in trimmed.find_all(["del", "s", "strike"]):
+        el.decompose()
+    for el in trimmed.find_all(attrs={"class": True}):
+        classes = el.get("class") or []
+        classes = [classes] if isinstance(classes, str) else classes
+        joined = " ".join(classes).lower()
+        if any(marker in joined for marker in STRUCK_THROUGH):
+            el.decompose()
+    return trimmed.get_text(" ", strip=True) or fallback
+
+
 def _title_from_url(url):
     """The product slug as a last-resort name.
 
@@ -312,7 +350,7 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
         return []
 
     items, seen = [], set()
-    in_stock = _stock_reader(best)
+    read_stock = _stock_reader(best)
     for block in best:
         anchor = _product_link(block)
         if anchor is None:
@@ -332,7 +370,7 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
         # The block was chosen for holding a currency-adjacent number, so a
         # None here means the caller rejected the value itself -- a zero,
         # which is a cart total or a placeholder, not a bottle.
-        price = parse_price(text)
+        price = parse_price(_payable_text(block, text))
         if price is None:
             continue
         items.append({
@@ -344,7 +382,7 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
             # Marked rather than dropped: the probe counts parsed products
             # to decide whether an adapter works, and a shop whose stock
             # happens to be sold out today must not read as broken.
-            "in_stock": in_stock(block),
+            **dict(zip(("in_stock", "stock_basis"), read_stock(block))),
         })
     return items
 
@@ -555,6 +593,11 @@ OUT_OF_STOCK_CLASSES = {"outofstock", "out-of-stock", "out_of_stock",
                         # silences the restock.
                         "product-oos"}
 OUT_OF_STOCK_SCHEMA = "schema.org/outofstock"
+OUT_OF_STOCK_TOKENS = {re.sub(r"[^a-z0-9]", "", c) for c in OUT_OF_STOCK_CLASSES}
+# schema.org availability values that mean "not now". InStock is deliberately
+# absent: it is a *claim*, and winenot's theme makes it on every card it
+# serves, including bottles whose own buy button is disabled.
+SOLD_OUT_AVAILABILITY = {"outofstock", "soldout", "discontinued"}
 
 
 def markup_says_sold_out(block):
@@ -565,9 +608,24 @@ def markup_says_sold_out(block):
     """
     classes = block.get("class") or []
     classes = [classes] if isinstance(classes, str) else classes
-    if any(c.lower() in OUT_OF_STOCK_CLASSES for c in classes):
+    # Stripped of separators, so `-outOfStock`, `out_of_stock` and
+    # `outofstock` are one rule rather than three near-misses.
+    if any(re.sub(r"[^a-z0-9]", "", c.lower()) in OUT_OF_STOCK_TOKENS
+           for c in classes):
         return True
     # An explicit machine-readable statement, wherever it sits in the card.
+    # Read as a value, not as a substring: PrestaShop 1.6 writes it as
+    # <link itemprop="availability" href="...schema.org/OutOfStock"> and 1.7
+    # as <meta itemprop="availability" content="OutOfStock">, so scanning for
+    # the full schema.org URL missed every 1.7 shop -- vinnouveau's sold-out
+    # cards were caught only by the French words beside them, and a restyle
+    # that dropped the label would have taken that shop silently to zero.
+    for el in block.find_all(attrs={"itemprop": True}):
+        if (el.get("itemprop") or "").strip().lower() != "availability":
+            continue
+        value = (el.get("href") or el.get("content") or "").strip().lower()
+        if value.rsplit("/", 1)[-1] in SOLD_OUT_AVAILABILITY:
+            return True
     for el in block.find_all(True):
         for attr in ("href", "content", "itemtype"):
             if OUT_OF_STOCK_SCHEMA in (el.get(attr) or "").lower():
@@ -575,10 +633,54 @@ def markup_says_sold_out(block):
     return False
 
 
-# A control the shop has disabled is the shop saying "not this one". Used
-# only to break a tie the text cannot: see _stock_reader.
+# The buy control, named the way each platform names it. Matched narrowly on
+# purpose: a card can carry other disabled inputs -- cavepurjus ships
+# `<input type="hidden" name="orderby" disabled>` in a filter form, and
+# Magento themes carry Tailwind `disabled:` class names -- and reading one of
+# those as "sold out" would suppress a real bottle silently.
+CART_CONTROL_CLASSES = {"add-to-cart", "add_to_cart", "add-to-cart-button",
+                        "single_add_to_cart_button", "ajax_add_to_cart_button",
+                        "tocart", "btn-cart", "cart-button"}
+CART_CONTROL_WORDS = ("add-to-cart", "add_to_cart", "panier", "cart", "basket",
+                      "warenkorb", "winkelwagen")
+
+
+def _is_cart_control(el):
+    if el.get("type") == "hidden":
+        return False
+    if (el.get("data-button-action") or "").strip().lower() == "add-to-cart":
+        return True
+    classes = el.get("class") or []
+    classes = [classes] if isinstance(classes, str) else classes
+    if any(c.lower() in CART_CONTROL_CLASSES for c in classes):
+        return True
+    haystack = " ".join(filter(None, [
+        el.get("name"), el.get("id"), el.get("onclick"), el.get("title"),
+    ])).lower()
+    return any(word in haystack for word in CART_CONTROL_WORDS)
+
+
+# A buy control the shop has disabled is the shop saying "not this one".
 def _has_disabled_control(block):
-    return any(el.has_attr("disabled") for el in block.find_all(["button", "input"]))
+    return any(el.has_attr("disabled") and _is_cart_control(el)
+               for el in block.find_all(["button", "input"]))
+
+
+# schema.org availability is only ever believed when it says *out* of stock.
+# winenot's PrestaShop theme stamps `<link itemprop="availability"
+# href="https://schema.org/InStock">` into every card and every product page
+# -- including https://winenot.fr/jura/3676-ploussard.html, whose own
+# data-product island says `quantity: 0` and whose buy button is disabled.
+# A field that reads InStock for a bottle nobody can buy is not evidence.
+IN_STOCK_SCHEMA = "schema.org/instock"
+
+
+def _claims_in_stock(block):
+    for el in block.find_all(True):
+        for attr in ("href", "content", "itemtype"):
+            if IN_STOCK_SCHEMA in (el.get(attr) or "").lower():
+                return True
+    return False
 
 
 def _stock_reader(blocks):
@@ -600,25 +702,52 @@ def _stock_reader(blocks):
     nobody can buy and then write them to seen.json, silencing the restock
     that is the point of watching them.
     """
-    text_says, disabled = {}, {}
+    text_says, disabled, claims = {}, {}, {}
     for block in blocks:
         text_says[id(block)] = bool(
             OUT_OF_STOCK.search(_strip_accents(block.get_text(" ", strip=True))))
         disabled[id(block)] = _has_disabled_control(block)
+        claims[id(block)] = _claims_in_stock(block)
 
-    trust_buttons = (
-        bool(blocks)
-        and all(text_says.values())
-        and 0 < sum(disabled.values()) < len(blocks))
+    # A buy button the shop has disabled on some cards and not others is the
+    # shop saying which bottles are gone -- whatever the text does or does not
+    # say. That "some and not others" is the whole guard: a control disabled
+    # on every card is furniture, and one disabled on none tells us nothing.
+    #
+    # This used to also require the text to have condemned every card, which
+    # was written for leszinzinsduvin (it ships "Produit épuisé" in all of
+    # them and reveals it with CSS). winenot says nothing in its text at all,
+    # so the clause meant its disabled buttons were ignored and all 1228 of
+    # its listings read as buyable -- including
+    # https://winenot.fr/jura/3676-ploussard.html, sold out for days, whose
+    # card carries a disabled add-to-cart and whose product page says
+    # `quantity: 0` while its schema.org markup still claims InStock.
+    trust_buttons = bool(blocks) and 0 < sum(disabled.values()) < len(blocks)
 
-    def in_stock(block):
+    # Does this page state stock at all? A page where nothing is ever marked
+    # gone -- no out-of-stock class, no "epuise", no disabled control -- has
+    # told us nothing, and saying "in stock" from that silence is what put a
+    # sold-out bottle in a digest. A constant schema.org/InStock across every
+    # card is silence too, and reads like a statement, which is worse.
+    states_stock = any(
+        markup_says_sold_out(b) or text_says[id(b)] or disabled[id(b)]
+        for b in blocks)
+
+    def read(block):
+        """(in_stock, basis). basis is how we know, or "none" if we do not."""
         if markup_says_sold_out(block):
-            return False
+            return False, "markup"
         if trust_buttons:
-            return not disabled[id(block)]
-        return not text_says[id(block)]
+            return (not disabled[id(block)],
+                    "buy button" if not disabled[id(block)] else "markup")
+        if text_says[id(block)]:
+            return False, "listing text"
+        if states_stock:
+            # This page does mark its sold-out cards; this one is not marked.
+            return True, "not marked sold out"
+        return True, "none"
 
-    return in_stock
+    return read
 
 
 NEXT_WORDS = {"next", "suivant", "suivante", "volgende", "weiter", "›", "»", "→", ">"}

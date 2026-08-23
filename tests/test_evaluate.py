@@ -47,12 +47,62 @@ def pricebook():
         ("Domaine Labet half bottle 2020", 375),
         ("Domaine Labet demi 2020", 375),
         ("Domaine Labet 37,5cl 2020", 375),
+        # Most specific first: a Double Magnum holds the word "magnum", and
+        # with 1500 tested first a 3L bottle was recorded at price/2.3
+        # instead of price/5.0 -- 2.2x too high, for the 180 days an
+        # observation lives.
+        ("Ganevat Chalasses 2018 Double Magnum", 3000),
+        ("Ganevat Chalasses 2018 Jeroboam", 3000),
     ],
 )
 def test_size_parsing_fixtures(text, expected_ml):
     size_ml, confidence = evaluate.parse_size(text)
     assert size_ml == expected_ml
     assert confidence == "high"
+
+
+@pytest.mark.parametrize("text", [
+    # A sweetness, not a format. Both of the first two are real strings from
+    # committed fixtures -- pangee ships "Vin Blanc Demi-Sec", winenot ships
+    # "Atemporelle Demi Sec" -- and both were read as 375ml at *high*
+    # confidence. A full bottle then entered the reference pool at
+    # price/0.55, an 80% inflation, and scored its own verdict against
+    # expected = reference x 0.55, which is a DEAL carrying no caveat.
+    "Vin Blanc Demi-Sec",
+    "Atemporelle Demi Sec",
+    "Cremant du Jura Demi Doux",
+    "Vouvray demi-sec 2022",
+])
+def test_a_sweetness_is_not_a_bottle_size(text):
+    """750 at low confidence, which caveats the row rather than silencing
+    it. A bare "demi" still means a half bottle."""
+    assert evaluate.parse_size(text) == (750, "low")
+
+
+@pytest.mark.parametrize("title", [
+    # Live: last night's run named "Ganevat: Pack" among the cuvees it could
+    # not place. Committed: pangee sells "Le Fruit blanc 2024 ( 5 +1 offerte
+    # )" at 36,00 EUR -- six bottles priced as one, EUR 6 a bottle against a
+    # EUR 13 reference, which is a guaranteed DEAL, and the row then entered
+    # the reference pool as though it were a single bottle.
+    "Ganevat Pack decouverte",
+    "Le Fruit blanc 2024 ( 5 +1 offerte )",
+    "Lot de 6 bouteilles Ganevat",
+    "Duo Ganevat",
+])
+def test_a_multi_bottle_lot_is_a_bundle(title):
+    assert evaluate.is_bundle(title)
+
+
+@pytest.mark.parametrize("title", [
+    "Ganevat Les Chalasses 2018",
+    "Ganevat Les Chalasses Marnes Bleues 2018",
+    "Trousseau 2020",
+])
+def test_a_single_bottle_is_not_a_bundle(title):
+    """The words are common enough that over-matching would caveat the whole
+    catalogue and drop every format multiplier with it."""
+    assert not evaluate.is_bundle(title)
 
 
 def test_size_defaults_to_750_with_low_confidence_when_unmatched():

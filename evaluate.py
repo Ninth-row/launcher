@@ -30,10 +30,24 @@ def load_pricebook(path=None):
 
 # --- bottle size ----------------------------------------------------------
 
+# Most specific first, because several of these contain each other. A
+# "Double Magnum" is 3000ml and holds the word "magnum", so with 1500 tested
+# first a 3L bottle was measured as 1.5L: recorded at price/2.3 instead of
+# price/5.0, roughly 2.2x too high, and that figure is the reference every
+# other shop's listing of that wine is judged against for 180 days.
 SIZE_PATTERNS = [
-    (375, re.compile(r"\b(?:half(?:\s*bottle)?|demie?(?:-?\s*bouteille)?|37[.,]?5\s*cl|375\s*ml)\b", re.I)),
-    (1500, re.compile(r"\b(?:magnum|mag\.?|1[.,]5\s*l|150\s*cl|1500\s*ml)\b", re.I)),
     (3000, re.compile(r"\b(?:double\s*magnum|jeroboam|3[.,]0?\s*l|300\s*cl|3000\s*ml)\b", re.I)),
+    # `demi` only where it means half a bottle. "Demi-Sec" is a sweetness,
+    # not a format, and pangee ships "Vin Blanc Demi-Sec" while winenot ships
+    # "Atemporelle Demi Sec": both were read as 375ml at *high* confidence, so
+    # a full bottle entered the pool at price/0.55 -- an 80% inflation -- and
+    # scored its own verdict against expected = reference x 0.55, which is a
+    # DEAL with no caveat to warn anyone. A bare "demi" still means a half
+    # bottle; it is only the sweetness words that disqualify it.
+    (375, re.compile(r"\b(?:half(?:\s*bottle)?|demie(?![-\s]*sec)"
+                     r"|demi(?![-\s]*(?:sec|doux|brut))"
+                     r"|37[.,]?5\s*cl|375\s*ml)\b", re.I)),
+    (1500, re.compile(r"\b(?:magnum|mag\.?|1[.,]5\s*l|150\s*cl|1500\s*ml)\b", re.I)),
     (750, re.compile(r"\b(?:75\s*cl|750\s*ml)\b", re.I)),
     # Jura Vin Jaune ships in a 620ml clavelin. Half the tracked
     # producers are Jura, so treating one as 750ml misprices it by ~20%.
@@ -56,9 +70,18 @@ def parse_size(text):
 # levinnaturel and petitescaves ("COFFRET ANNIVERSAIRE GANEVAT", EUR 450)
 # would otherwise be scored against a ~EUR 70 single-bottle reference and
 # shouted about as HIGH. Detect them and caveat instead of pretending.
+# `pack` and `lot de N` were missing, and they are not hypothetical: last
+# night's live run listed "Ganevat: Pack" among the cuvees it could not
+# place, and pangee's committed fixture sells "Le Fruit blanc 2024 ( 5 +1
+# offerte )" at 36,00 EUR -- six bottles priced as one, which is EUR 6 a
+# bottle against a EUR 13 reference and therefore a guaranteed DEAL, and the
+# row then entered the reference pool as if it were a single bottle.
 BUNDLE_RE = re.compile(
     r"\b(?:coffret|caisse|carton|case\s+of|gift\s*(?:box|set)|"
-    r"(?:\d+)\s*(?:bouteilles|bottles)|assortiment|panach\w+)\b",
+    r"(?:\d+)\s*(?:bouteilles|bottles)|assortiment|panach\w+|"
+    r"pack|lot\s+de\s+\d+|duo|trio)\b"
+    # "5 +1 offerte", "6+1 offert": a promotional multi-bottle lot.
+    r"|\d+\s*\+\s*\d+\s*offert",
     re.I,
 )
 
@@ -293,6 +316,17 @@ def evaluate_hit(hit, pricebook, market_store=None, aliases=None):
         reference_price = observed["price"]
         basis, basis_confidence = observed["basis"], observed["confidence"]
         reference_verified = observed["confidence"] == "high"
+        # A reference drawn from the same cuvee elsewhere already contains
+        # the cru: it *is* a Bonnes-Mares price. Multiplying it by the
+        # grand-cru factor again valued a EUR 1100 bottle at EUR 4950, so the
+        # identical wine EUR 100 dearer than our only comparison came out
+        # DEAL. Fires deterministically the moment two shops list the same
+        # Burgundy cru -- and every burgundy producer watched is unverified,
+        # so the observed figure is always the one used. A producer-level
+        # reference (the line median, or a hand-entered figure) is the case
+        # the multiplier was written for, and keeps it.
+        if observed.get("level") == "cuvee":
+            tier_multiplier = 1.0
     elif manual_price is not None:
         reference_price, basis, basis_confidence = manual_price, "unverified placeholder", "low"
 

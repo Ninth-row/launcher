@@ -335,6 +335,38 @@ HTTP header or printed.
   "Corse", "Loire" or "Bourgogne" while the img alt read "Clos Canarelli,
   Tara Di Sognu 2024 Rouge 75cl". A candidate of one word is taken only when
   nothing longer is offered -- a bottle is at least a grower and a cuvee.
+- The buy button is a stock statement, and on some shops the only true one.
+  winenot's PrestaShop theme stamps `schema.org/InStock` into every card and
+  leaves `product-flags` empty on a bottle nobody can buy, so its 1228
+  listings all read as buyable -- including
+  `winenot.fr/jura/3676-ploussard.html`, sold out for days, whose own
+  `data-product` island says `quantity: 0`. A disabled add-to-cart decides
+  whenever the page disables *some* and not all; that "some and not others"
+  is the whole guard, because a control disabled on every card is furniture.
+  The buy control is matched narrowly (`_is_cart_control`) -- cavepurjus
+  ships a disabled hidden `orderby` input in a filter form, and reading that
+  as stock suppresses a real bottle.
+- `schema.org/InStock` is a claim, never evidence. Availability is read as a
+  *value* (`href` or `content`, 1.6 and 1.7 spell it differently) and only
+  ever believed when it says out of stock -- the same asymmetry
+  `markup_says_sold_out` already documents. vinnouveau's sold-out cards were
+  held up by the French words beside them alone, and a restyle would have
+  taken that shop silently to zero.
+- The price is the one you would pay. PrestaShop renders a discounted card
+  old-price-first ("Prix de base 13,50 € -10% Prix 12,15 €"), so taking the
+  first currency-adjacent number recorded 13,50 -- 9 of pangee's 36 committed
+  cards, and every card on both shops' promotions pages. A discount is
+  exactly the news this scraper exists to send, so the defect reported a real
+  DEAL as FAIR *and* fed the inflated figure to every other shop as their
+  reference. Struck-through and "base" nodes are removed before parsing;
+  never take the smallest number instead -- "729,90 € -40,00 € 689,90 €"
+  would then be priced at the discount.
+- A thousands separator is part of the number. `1 600,00 €` with a
+  non-breaking space -- how PrestaShop writes every four-figure price -- was
+  read as **600**, always downwards, always towards DEAL, and always on the
+  dearest bottles watched. `MIN_CREDIBLE_PRICE` is the floor `pdflist` has
+  always had: `€1 250,00` once parsed as 1.00, and a 1.00 reference makes
+  every honest listing of that wine a HIGH for 180 days.
 - A zero is not a price. Cart widgets ("Voir mon panier -- 0,00 EUR"), gift
   cards and "price on request" all carry a currency-adjacent zero, and zero
   is below every reference there will ever be, so such a row is a permanent
@@ -345,6 +377,17 @@ HTTP header or printed.
   `USD` marker touching the number). Never treat a bare 4-digit number as a
   price — it could be a vintage year. This is what `PRICE_PATTERN` /
   `parse_price` in `scraper.py` enforce; don't loosen it.
+- A redirect is followed by re-entering `Crawler.get()`, never by requests.
+  Every policy this class has -- robots, the per-host delay, the circuit
+  breaker, the run budget -- is keyed on the host we *asked for*, and
+  requests follows up to 30 hops silently. caves-carriere.fr redirects to
+  www.caves-carriere.fr, so that shop was crawled against a robots.txt that
+  was never read, and a chain across N hosts cost one delay and one budget
+  unit. Re-entry puts each hop through all of it. It must stay *following*
+  rather than refusing: six configured shops sit on a bare domain, and
+  refusing would take them dark, which is a false negative. `MAX_REDIRECTS`
+  bounds a loop, because neither the cache nor the breaker can -- every hop
+  is a different URL.
 - No module but `crawler.py` may call `requests` directly. If you're adding
   a new fetcher, it takes a `Crawler` instance and calls `.get()`.
 - `evaluate.py` never suppresses a hit for missing/unverified reference
@@ -580,6 +623,21 @@ HTTP header or printed.
   marking one would silence a real drop for 30 days; it refreshes
   `last_price` only, exactly as a silent run does. It is also not a
   heartbeat -- a run with no hits at all still sends nothing.
+- A bottle size is read most-specific-first, and a sweetness is not a size.
+  "Double Magnum" contains "magnum", so with 1500 tested first a 3L bottle
+  was recorded at price/2.3 instead of price/5.0 -- 2.2x too high, for the
+  180 days an observation lives. "Demi-Sec" contains "demi": pangee's "Vin
+  Blanc Demi-Sec" and winenot's "Atemporelle Demi Sec" were read as 375ml at
+  *high* confidence, so a full bottle entered the pool at price/0.55 and
+  scored itself against expected = reference x 0.55, a DEAL with no caveat.
+  A bare "demi" still means a half bottle; only the sweetness words
+  disqualify it.
+- A pack is a bundle. `pack`, `lot de N`, `duo` and the "5 +1 offerte"
+  promotional shape join coffret and caisse in `BUNDLE_RE`: pangee sells
+  "Le Fruit blanc 2024 ( 5 +1 offerte )" at EUR 36, six bottles priced as
+  one, and a live run named "Ganevat: Pack" among its unplaced cuvees. Priced
+  per bottle that is EUR 6 against a EUR 13 reference, which is a guaranteed
+  DEAL, and the row entered the reference pool as a single bottle.
 - A coffret/caisse is several bottles, so its price is not comparable to a
   per-bottle reference. `evaluate.py` must keep detecting bundles, applying
   no format multiplier, and always caveating them -- real listings like
@@ -613,6 +671,21 @@ HTTP header or printed.
   exactly like a broken scraper and is not one. Asking for 24 runs to receive
   10 only adds queue pressure, so the schedule asks for what it can get, and a
   `concurrency` group keeps a delayed run from overlapping the next one.
+- Every outbound request counts against the budget, robots.txt included. It
+  was not counted, so a run made about one uncounted request per host --
+  roughly 19 against a 400 budget sized from a measured 311-request pass --
+  and `MAX_REQUESTS_PER_RUN=1` still went to the network, which left the
+  budget untestable at its own boundary. It is deliberately not behind
+  `_wait_for_host`: robots.txt must be readable before that host's
+  `Crawl-delay` is known.
+- `Crawl-delay` is honoured upwards only. `or MIN_DELAY_SECONDS` let a shop
+  publishing `Crawl-delay: 1` pull us *below* the 3s floor this file
+  documents, which is the opposite of honouring the header.
+- The connect timeout is separate from the read timeout. A single `timeout=`
+  applies per socket read, so a host dribbling a byte every 14 seconds holds
+  the connection indefinitely -- and `MAX_RUN_SECONDS` is only checked
+  between shops, so one such host runs the job past `timeout-minutes` and
+  loses the whole crawl: no `hits.json`, no email, a red run, no explanation.
 - The run stops itself on wall clock as well as on requests. Reading all 23
   shops to the end of their catalogues is 311 requests and ~28 minutes cold
   (vinnouveau's 118 pages are most of it); a job killed at the runner's

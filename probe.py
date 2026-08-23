@@ -252,7 +252,16 @@ def save_diagnostic_page(name, url, body):
                 tag.string = (tag.string or "")[:DATA_SCRIPT_CAP]
             else:
                 tag.decompose()
-    trimmed = soup.prettify()[:DIAGNOSTIC_CAP]
+    # Pretty when it fits, complete when it does not. prettify() puts every
+    # tag on its own indented line, which roughly doubles a page -- so a
+    # catalogue page of 270KB became 600KB and the cap cut it off *before the
+    # product grid*, which is the one part a capture exists to show. Three
+    # winenot captures in probe_pages/ stop mid-<option>, and the stock
+    # question they were taken to answer could not be asked of them.
+    trimmed = soup.prettify()
+    if len(trimmed) > DIAGNOSTIC_CAP:
+        trimmed = str(soup)
+    trimmed = trimmed[:DIAGNOSTIC_CAP]
     (DIAGNOSTIC_DIR / f"{stem}.html").write_text(
         f"<!-- {url}\n     {describe_unparsed(body)}\n"
         f"     Styles and behaviour-only scripts stripped, data scripts kept\n"

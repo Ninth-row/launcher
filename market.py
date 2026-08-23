@@ -94,6 +94,23 @@ STOPWORDS = {
 
 TOKEN_RE = re.compile(r"[a-z]{2,}")
 
+# One wine, spelled two ways. These are not synonyms in general -- they are
+# the spellings the shops on this list actually use for the growers on it.
+# "Ploussard" and "Poulsard" are the same grape in the same village and the
+# same bottle: winenot.fr/jura/3676-ploussard.html is the listing that
+# started this, and it could never be compared with a shop writing Poulsard.
+# "VV" for vieilles vignes is the docstring's own example of a pair that
+# should match, and it scored 0.40 against a 0.60 threshold.
+SYNONYMS = {
+    "ploussard": "poulsard",
+    "vv": "vieilles vignes",
+    "nature": "savagnin",
+    "cdj": "cotes du jura",
+    "vdf": "vin de france",
+    "gc": "grand cru",
+    "1er": "premier",
+}
+
 
 def cuvee_tokens(title, producer_name="", aliases=(), seg=""):
     """The significant words of a cuvee: the title with the producer's whole
@@ -108,7 +125,10 @@ def cuvee_tokens(title, producer_name="", aliases=(), seg=""):
     phrases = list(aliases) + (producer_name or "").replace("/", " ").split() + (seg or "").split()
     for phrase in sorted(phrases, key=len, reverse=True):
         norm = norm.replace(normalize(phrase), " ")
-    return frozenset(t for t in TOKEN_RE.findall(norm) if t not in STOPWORDS)
+    tokens = []
+    for token in TOKEN_RE.findall(norm):
+        tokens.extend(SYNONYMS.get(token, token).split())
+    return frozenset(t for t in tokens if t not in STOPWORDS)
 
 
 def jaccard(a, b):
@@ -117,8 +137,37 @@ def jaccard(a, b):
     return len(a & b) / len(a | b)
 
 
+# Words that place a wine without naming it. Two bottles sharing only these
+# share an appellation, not an identity: "Cotes du Jura Chardonnay" and
+# "Cotes du Jura Chardonnay Les Chalasses" scored 0.75 and were pooled, so a
+# ~EUR 35 village wine set the reference for a ~EUR 90 lieu-dit -- a
+# permanent HIGH on the Chalasses and a permanent DEAL on the village wine.
+APPELLATION_WORDS = {
+    "cotes", "cote", "jura", "arbois", "pupillin", "chateau", "chalon",
+    "etoile", "macvin", "crement", "cremant", "bourgogne", "beaujolais",
+    "loire", "anjou", "saumur", "touraine", "alsace", "rhone", "savoie",
+    "bugey", "champagne", "france", "table", "pays", "igp", "aoc", "aop",
+    "chardonnay", "savagnin", "poulsard", "trousseau", "pinot", "gamay",
+    "chenin", "syrah", "gringet", "melon", "aligote", "noir", "gris",
+    "vieilles", "vignes", "grand", "premier", "cru", "villages",
+}
+
+
+def distinctive(tokens):
+    """The tokens that name *this* wine rather than where it comes from."""
+    return frozenset(t for t in tokens if t not in APPELLATION_WORDS)
+
+
 def same_cuvee(a, b, threshold=JACCARD_THRESHOLD):
-    return jaccard(a, b) >= threshold
+    if jaccard(a, b) < threshold:
+        return False
+    # Overlap is necessary, not sufficient. When one label names something
+    # the other does not -- a lieu-dit, a parcel, a cuvee name -- they are
+    # different wines however much appellation they share.
+    da, db = distinctive(a), distinctive(b)
+    if da and db:
+        return bool(da & db)
+    return da == db
 
 
 # --- producer segment (negoce vs domaine, without being told) ---------------
@@ -322,7 +371,7 @@ def reference_from_market(hit, store, format_multipliers, aliases_by_producer):
         exact = [r for r in same_wine if r["vintage"] == vintage]
         shops = _distinct_shops(exact)
         if len(shops) >= MIN_SHOPS:
-            return {"price": _median(exact),
+            return {"price": _median(exact), "level": "cuvee",
                     "basis": "same wine at %d shop%s" % (len(shops), "" if len(shops) == 1 else "s"),
                     "confidence": "high" if len(shops) >= SHOPS_FOR_HIGH else "medium",
                     "shops": sorted(shops), "n": len(exact)}
@@ -331,7 +380,8 @@ def reference_from_market(hit, store, format_multipliers, aliases_by_producer):
     #    hint, not a verdict, however many shops agree.
     shops = _distinct_shops(same_wine)
     if len(shops) >= MIN_SHOPS:
-        return {"price": _median(same_wine), "basis": "same cuvee, other vintages",
+        return {"price": _median(same_wine), "level": "cuvee",
+                "basis": "same cuvee, other vintages",
                 "confidence": "medium" if len(shops) >= SHOPS_FOR_HIGH else "low",
                 "shops": sorted(shops), "n": len(same_wine)}
 
@@ -339,7 +389,8 @@ def reference_from_market(hit, store, format_multipliers, aliases_by_producer):
     #    a domaine reference, but says nothing about which cuvee it is.
     line = [r for r in pool if r["seg"] == seg]
     if len(line) >= MIN_LINE_RECORDS and len(_distinct_shops(line)) >= SHOPS_FOR_HIGH:
-        return {"price": _median(line), "basis": "%s line median" % (seg or producer),
+        return {"price": _median(line), "level": "line",
+                "basis": "%s line median" % (seg or producer),
                 "confidence": "low", "shops": sorted(_distinct_shops(line)), "n": len(line)}
 
     return None
