@@ -612,6 +612,21 @@ HTTP header or printed.
   marking one would silence a real drop for 30 days; it refreshes
   `last_price` only, exactly as a silent run does. It is also not a
   heartbeat -- a run with no hits at all still sends nothing.
+- A bottle size is read most-specific-first, and a sweetness is not a size.
+  "Double Magnum" contains "magnum", so with 1500 tested first a 3L bottle
+  was recorded at price/2.3 instead of price/5.0 -- 2.2x too high, for the
+  180 days an observation lives. "Demi-Sec" contains "demi": pangee's "Vin
+  Blanc Demi-Sec" and winenot's "Atemporelle Demi Sec" were read as 375ml at
+  *high* confidence, so a full bottle entered the pool at price/0.55 and
+  scored itself against expected = reference x 0.55, a DEAL with no caveat.
+  A bare "demi" still means a half bottle; only the sweetness words
+  disqualify it.
+- A pack is a bundle. `pack`, `lot de N`, `duo` and the "5 +1 offerte"
+  promotional shape join coffret and caisse in `BUNDLE_RE`: pangee sells
+  "Le Fruit blanc 2024 ( 5 +1 offerte )" at EUR 36, six bottles priced as
+  one, and a live run named "Ganevat: Pack" among its unplaced cuvees. Priced
+  per bottle that is EUR 6 against a EUR 13 reference, which is a guaranteed
+  DEAL, and the row entered the reference pool as a single bottle.
 - A coffret/caisse is several bottles, so its price is not comparable to a
   per-bottle reference. `evaluate.py` must keep detecting bundles, applying
   no format multiplier, and always caveating them -- real listings like
