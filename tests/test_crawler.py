@@ -31,7 +31,7 @@ def make_crawler(tmp_cache, **kwargs):
 def test_robots_disallow_never_fetches_blocked_path(monkeypatch, tmp_cache):
     calls = []
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         calls.append(url)
         if url.endswith("/robots.txt"):
             return FakeResp(200, "User-agent: *\nDisallow: /private/\n")
@@ -47,7 +47,7 @@ def test_robots_disallow_never_fetches_blocked_path(monkeypatch, tmp_cache):
 
 
 def test_allowed_path_is_fetched(monkeypatch, tmp_cache):
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "User-agent: *\nDisallow: /private/\n")
         return FakeResp(200, '{"ok": true}', headers={"ETag": "abc"})
@@ -67,7 +67,7 @@ def test_conditional_request_reuses_cache_on_304(monkeypatch, tmp_cache):
         FakeResp(304, ""),                                  # second fetch: not modified
     ])
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         return next(responses)
 
     monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
@@ -93,7 +93,7 @@ def test_conditional_request_reuses_cache_on_304(monkeypatch, tmp_cache):
 def test_cache_hit_within_ttl_skips_network_entirely(monkeypatch, tmp_cache):
     call_count = {"n": 0}
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         call_count["n"] += 1
         if url.endswith("/robots.txt"):
             return FakeResp(200, "User-agent: *\n")
@@ -111,7 +111,7 @@ def test_cache_hit_within_ttl_skips_network_entirely(monkeypatch, tmp_cache):
 
 
 def test_fresh_env_bypasses_cache(monkeypatch, tmp_cache):
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "User-agent: *\n")
         return FakeResp(200, '{"ok": true}')
@@ -127,7 +127,7 @@ def test_fresh_env_bypasses_cache(monkeypatch, tmp_cache):
 def test_backoff_retries_and_raises_after_max_attempts(monkeypatch, tmp_cache):
     call_count = {"n": 0}
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "User-agent: *\n")
         call_count["n"] += 1
@@ -152,7 +152,7 @@ def test_retry_after_header_is_honoured(monkeypatch, tmp_cache):
         FakeResp(200, '{"ok": true}'),
     ])
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         return next(seq)
 
     monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
@@ -164,7 +164,7 @@ def test_retry_after_header_is_honoured(monkeypatch, tmp_cache):
 
 
 def test_circuit_breaker_opens_after_three_failed_requests(monkeypatch, tmp_cache):
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "User-agent: *\n")
         return FakeResp(500, "")
@@ -180,8 +180,82 @@ def test_circuit_breaker_opens_after_three_failed_requests(monkeypatch, tmp_cach
         c.get("https://shop.example.com/one-more.json")
 
 
+def test_a_redirect_to_another_host_checks_that_host_robots(monkeypatch, tmp_cache):
+    """caves-carriere.fr redirects to www.caves-carriere.fr, so that shop has
+    been crawled all along against a robots.txt we never read. requests would
+    follow up to 30 hops silently, and every policy this class has is keyed on
+    the host we asked for."""
+    asked = []
+
+    def fake_get(url, headers=None, timeout=None, **kwargs):
+        asked.append(url)
+        if url == "https://bare.example.com/robots.txt":
+            return FakeResp(200, "User-agent: *\n")
+        if url == "https://www.example.com/robots.txt":
+            return FakeResp(200, "User-agent: *\nDisallow: /shop\n")
+        if url == "https://bare.example.com/shop":
+            return FakeResp(301, "", headers={"Location": "https://www.example.com/shop"})
+        raise AssertionError(f"a disallowed destination must never be fetched: {url}")
+
+    monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
+    c = make_crawler(tmp_cache)
+
+    with pytest.raises(crawler_mod.Disallowed):
+        c.get("https://bare.example.com/shop")
+
+    assert "https://www.example.com/robots.txt" in asked, \
+        "the destination host's robots.txt must be read before its page is"
+
+
+def test_a_redirect_is_followed_so_a_shop_on_a_bare_domain_still_works(monkeypatch, tmp_cache):
+    """Six configured shops sit on a bare domain. Refusing redirects instead
+    of re-entering would take them dark, which is a false negative."""
+    def fake_get(url, headers=None, timeout=None, **kwargs):
+        if url.endswith("/robots.txt"):
+            return FakeResp(200, "User-agent: *\n")
+        if url == "https://bare.example.com/shop":
+            return FakeResp(301, "", headers={"Location": "https://www.example.com/shop"})
+        return FakeResp(200, '{"ok": true}')
+
+    monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
+    c = make_crawler(tmp_cache)
+
+    assert c.get("https://bare.example.com/shop").json() == {"ok": True}
+
+
+def test_each_redirect_hop_costs_a_budget_unit(monkeypatch, tmp_cache):
+    """N hops used to cost one budget unit and one host delay."""
+    def fake_get(url, headers=None, timeout=None, **kwargs):
+        if url.endswith("/robots.txt"):
+            return FakeResp(200, "User-agent: *\n")
+        if url == "https://a.example.com/x":
+            return FakeResp(302, "", headers={"Location": "https://a.example.com/y"})
+        return FakeResp(200, "done")
+
+    monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
+    c = make_crawler(tmp_cache)
+    c.get("https://a.example.com/x")
+    # robots + the redirect + the destination.
+    assert c.request_count == 3
+
+
+def test_a_redirect_loop_terminates(monkeypatch, tmp_cache):
+    """Neither the cache nor the breaker can stop one: every hop is a new
+    URL, so without a bound this eats the whole run budget."""
+    def fake_get(url, headers=None, timeout=None, **kwargs):
+        if url.endswith("/robots.txt"):
+            return FakeResp(200, "User-agent: *\n")
+        n = int(url.rsplit("/", 1)[-1])
+        return FakeResp(302, "", headers={"Location": f"https://a.example.com/{n + 1}"})
+
+    monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
+    c = make_crawler(tmp_cache, max_requests=100)
+    with pytest.raises(crawler_mod.UpstreamError, match="redirects"):
+        c.get("https://a.example.com/1")
+
+
 def test_budget_exceeded_stops_before_network_call(monkeypatch, tmp_cache):
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "User-agent: *\n")
         return FakeResp(200, '{"ok": true}')
@@ -205,7 +279,7 @@ def test_robots_txt_counts_against_the_budget(monkeypatch, tmp_cache):
     """The budget is a promise about outbound requests, not about some of
     them. At max_requests=1 the robots fetch alone exhausts it."""
     monkeypatch.setattr(crawler_mod.requests, "get",
-                        lambda url, headers=None, timeout=None: FakeResp(200, "User-agent: *\n"))
+                        lambda url, headers=None, timeout=None, **kwargs: FakeResp(200, "User-agent: *\n"))
     c = make_crawler(tmp_cache, max_requests=1)
     with pytest.raises(crawler_mod.BudgetExceeded):
         c.get("https://shop.example.com/a.json")
@@ -220,7 +294,7 @@ def test_min_delay_enforced_between_requests_to_same_host(monkeypatch, tmp_cache
     fake_now = {"t": 1000.0}
     monkeypatch.setattr(crawler_mod.time, "monotonic", lambda: fake_now["t"])
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "User-agent: *\n")
         return FakeResp(200, '{"ok": true}')
@@ -247,7 +321,7 @@ def test_crawl_delay_from_robots_overrides_min_delay(monkeypatch, tmp_cache):
     monkeypatch.setattr(crawler_mod.time, "sleep", lambda s: sleeps.append(s))
     monkeypatch.setattr(crawler_mod.random, "uniform", lambda a, b: 0)
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "User-agent: *\nCrawl-delay: 10\n")
         return FakeResp(200, '{"ok": true}')
@@ -418,7 +492,7 @@ def test_a_real_catalogue_is_never_called_a_challenge():
 
 
 def test_a_challenge_raises_instead_of_returning_a_healthy_200(monkeypatch, tmp_cache):
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "")
         return FakeResp(200, VINNATUREL_CHALLENGE)
@@ -432,7 +506,7 @@ def test_a_challenge_raises_instead_of_returning_a_healthy_200(monkeypatch, tmp_
 
 def test_a_challenge_is_never_written_to_the_cache(monkeypatch, tmp_cache):
     """A cached challenge is a lie with a six-hour shelf life."""
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "")
         return FakeResp(200, SGCAPTCHA_CHALLENGE)
@@ -450,7 +524,7 @@ def test_a_challenge_already_in_the_cache_is_not_served(monkeypatch, tmp_cache):
     """Six hours of poison were already in the cache when this shipped."""
     calls = []
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         calls.append(url)
         if url.endswith("/robots.txt"):
             return FakeResp(200, "")
@@ -474,7 +548,7 @@ def test_a_challenge_is_not_retried(monkeypatch, tmp_cache):
     """Three goes at a captcha is what earns a real block."""
     calls = []
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         calls.append(url)
         if url.endswith("/robots.txt"):
             return FakeResp(200, "")
@@ -490,7 +564,7 @@ def test_a_challenge_is_not_retried(monkeypatch, tmp_cache):
 
 def test_a_challenging_host_eventually_trips_the_breaker(monkeypatch, tmp_cache):
     """A shop that challenges us is refusing, the same as a 403."""
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "")
         return FakeResp(200, VINNATUREL_CHALLENGE)
@@ -568,7 +642,7 @@ def test_the_robots_txt_that_refused_us_is_kept(monkeypatch, tmp_path):
     fetched to make the decision."""
     rules = "User-agent: *\nDisallow: /\n"
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         assert url.endswith("/robots.txt")
         return FakeResp(200, rules)
 
@@ -587,7 +661,7 @@ def test_the_robots_txt_that_refused_us_is_kept(monkeypatch, tmp_path):
 def test_an_unreachable_robots_txt_is_recorded_as_such(monkeypatch, tmp_path):
     """It is treated as allow-all, and the report must be able to say that
     is why rather than implying the host published permission."""
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         raise crawler_mod.requests.RequestException("no route")
 
     monkeypatch.setattr(crawler_mod.requests, "get", fake_get)

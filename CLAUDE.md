@@ -377,6 +377,17 @@ HTTP header or printed.
   `USD` marker touching the number). Never treat a bare 4-digit number as a
   price — it could be a vintage year. This is what `PRICE_PATTERN` /
   `parse_price` in `scraper.py` enforce; don't loosen it.
+- A redirect is followed by re-entering `Crawler.get()`, never by requests.
+  Every policy this class has -- robots, the per-host delay, the circuit
+  breaker, the run budget -- is keyed on the host we *asked for*, and
+  requests follows up to 30 hops silently. caves-carriere.fr redirects to
+  www.caves-carriere.fr, so that shop was crawled against a robots.txt that
+  was never read, and a chain across N hosts cost one delay and one budget
+  unit. Re-entry puts each hop through all of it. It must stay *following*
+  rather than refusing: six configured shops sit on a bare domain, and
+  refusing would take them dark, which is a false negative. `MAX_REDIRECTS`
+  bounds a loop, because neither the cache nor the breaker can -- every hop
+  is a different URL.
 - No module but `crawler.py` may call `requests` directly. If you're adding
   a new fetcher, it takes a `Crawler` instance and calls `.get()`.
 - `evaluate.py` never suppresses a hit for missing/unverified reference

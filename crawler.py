@@ -24,7 +24,7 @@ import time
 import urllib.robotparser
 from collections import defaultdict
 from pathlib import Path
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import requests
 
@@ -54,6 +54,11 @@ CACHE_TTL_SECONDS = 6 * 3600
 # shops, so one such host can run the job past the workflow timeout and lose
 # the whole crawl: no hits.json, no email, a red run and no explanation.
 CONNECT_TIMEOUT = 5
+# Redirects are followed by re-entering get(), so each hop is checked against
+# that host's robots.txt, delay, breaker and the run budget. Bounded because
+# neither the cache nor the breaker can stop a loop: every hop is a new URL.
+REDIRECT_STATUSES = (301, 302, 303, 307, 308)
+MAX_REDIRECTS = 5
 DEFAULT_MAX_REQUESTS_PER_RUN = 400
 DEFAULT_CACHE_DIR = Path(__file__).parent / ".cache"
 
@@ -79,6 +84,15 @@ DEFAULT_CONTACT = ""
 
 class CircuitOpen(FetchError):
     """This host had 3+ consecutive failures this run; it's being skipped."""
+
+
+class _Redirect:
+    """Internal: _attempt_with_retries saw a 3xx and did not follow it."""
+
+    __slots__ = ("url",)
+
+    def __init__(self, url):
+        self.url = url
 
 
 class BudgetExceeded(FetchError):
@@ -384,11 +398,17 @@ class Crawler:
 
     # -- the fetch itself -------------------------------------------------
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, _hops=0):
         """GET url through robots/rate-limit/backoff/cache/budget policy.
 
         Returns a FetchResult, or raises Disallowed / CircuitOpen /
         BudgetExceeded / UpstreamError.
+
+        A redirect re-enters this method rather than being followed inside
+        requests, so the destination gets its own robots check, its own
+        host delay and its own budget unit. `_hops` bounds a redirect loop;
+        the cache and circuit breaker cannot, because each hop is a
+        different URL.
         """
         full_url = _build_url(url, params)
         host = _host_of(full_url)
@@ -442,7 +462,14 @@ class Crawler:
                     self._record_success(host)
                 raise
             self._record_success(host)
-            return result
+
+        # Outside the host lock: the next hop is very often a different host,
+        # and it needs that host's lock, not this one's.
+        if isinstance(result, _Redirect):
+            if _hops >= MAX_REDIRECTS:
+                raise UpstreamError(f"more than {MAX_REDIRECTS} redirects from {url}")
+            return self.get(result.url, _hops=_hops + 1)
+        return result
 
     def _attempt_with_retries(self, full_url, host, headers, cached):
         last_exc = None
@@ -451,7 +478,8 @@ class Crawler:
             self.request_count += 1
             try:
                 resp = requests.get(full_url, headers=headers,
-                                    timeout=(CONNECT_TIMEOUT, TIMEOUT))
+                                    timeout=(CONNECT_TIMEOUT, TIMEOUT),
+                                    allow_redirects=False)
             except requests.RequestException as e:
                 last_exc = e
                 self._last_request_at[host] = time.monotonic()
@@ -461,6 +489,21 @@ class Crawler:
                 raise UpstreamError(str(e)) from e
 
             self._last_request_at[host] = time.monotonic()
+
+            # A redirect is not followed here. requests would follow up to
+            # 30 hops silently, and every policy this class has -- robots,
+            # the per-host delay, the circuit breaker, the budget -- is keyed
+            # on the host we *asked* for. caves-carriere.fr redirects to
+            # www.caves-carriere.fr, so that shop has been crawled all along
+            # against a robots.txt we never read. Handing the location back
+            # to get() puts each hop through all of it.
+            if resp.status_code in REDIRECT_STATUSES:
+                location = (resp.headers.get("Location") or "").strip()
+                if not location:
+                    raise UpstreamError(
+                        f"HTTP {resp.status_code} with no Location",
+                        status_code=resp.status_code)
+                return _Redirect(urljoin(full_url, location))
 
             if resp.status_code == 304 and cached:
                 cached["fetched_at"] = time.time()

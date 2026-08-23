@@ -237,7 +237,7 @@ def test_a_pdf_survives_the_cache_as_bytes(monkeypatch, tmp_path):
     the parser something unreadable on every hit for six hours."""
     blob = b"%PDF-1.4 fake bytes \x00\x01\x02"
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, **kwargs):
         if url.endswith("/robots.txt"):
             return FakeResp(200, "")
         return FakeResp(200, "mojibake", {"Content-Type": "application/pdf"}, blob)
