@@ -10,16 +10,23 @@ sold out on every run before tonight. The dry run at 22:46 reports 1189 in
 stock and 32 sold out, and Overnoy/Houillon at winenot has moved from a
 reported find to correctly sold out everywhere.
 
-Five defects fixed in total, every one of them producing wrong output rather
+Eight defects fixed in total, every one of them producing wrong output rather
 than no output: a shop reporting its entire catalogue as buyable, discounted
 wines recorded at their pre-discount price, four figure prices read as three,
-a Burgundy cru priced against itself with the cru premium applied twice, and
-two spellings of one grape treated as two wines.
+a Burgundy cru priced against itself with the cru premium applied twice, two
+spellings of one grape treated as two wines, a sweetness read as a half
+bottle, a six bottle pack priced as one bottle, and every redirect hop
+escaping the crawler's own robots, delay and budget rules.
 
-729 tests pass, the fixture gate passes on all six checks, and the live end
-to end dry run completed with no unhandled exception: 19 shops, 17301
-listings, 132 hits, 20m21s. No new dependency, no new request, and no change
+747 tests pass and the fixture gate passes on all six checks. The cold cache
+dry run on the finished tree completed with no unhandled exception: 19 shops,
+all status ok, 17312 listings, 133 hits, 29m46s against a 45 minute internal
+budget that never bound. No new dependency, no added request, and no change
 to the rules that decide what reaches your inbox.
+
+Three further review findings are held back rather than shipped, each with
+the evidence it is waiting on named below. One of them I could not settle at
+all from here, and it says so.
 
 ## Survey
 
@@ -111,6 +118,79 @@ Burgundy namesake, not Christophe's domaine, so the shop was never a source
 for the estate we watch. That ambiguity was open in yesterday's notes and is
 now closed.
 
+## Review findings, assessed and dispositioned
+
+A separate review produced ten findings. Each was put through four gates
+before it could be shipped: it must reproduce offline against a fixture or a
+unit test, it must be able to reach a watched producer, its direction of
+failure must be known, and the fix must be safe under invariant 1. Three
+passed all four and were shipped.
+
+[IMPROVE] A sweetness and a pack are not a bottle size. Demi-Sec contains
+demi, so pangee's Vin Blanc Demi-Sec and winenot's Atemporelle Demi Sec were
+read as 375ml at high confidence, which puts a full bottle into the reference
+pool at price divided by 0.55 and then scores it against that same figure: a
+DEAL with no caveat. Double Magnum contains magnum and 1500 was tested first,
+so a 3L bottle was recorded at price over 2.3 rather than price over 5.0, too
+high by 2.2 times for the 180 days an observation lives. Sizes are now read
+most specific first, and the sweetness words disqualify demi while a bare
+demi still means a half bottle. A pack, a lot de N, a duo and the 5 +1
+offerte shape now join coffret in the bundle rule: pangee sells six bottles
+as one listing at EUR 36, which priced per bottle is EUR 6 against an EUR 13
+reference, a guaranteed DEAL that also entered the pool as a single bottle.
+
+[IMPROVE] robots.txt counts against the budget, the delay floor holds, and
+the connect timeout is separate from the read timeout. The robots fetch was
+the one uncounted request, about one per host, so a run made roughly 19
+requests it never accounted for and MAX_REQUESTS_PER_RUN=1 still went to the
+network, which left the budget untestable at its own boundary. Crawl-delay
+was applied with an or, so a shop publishing Crawl-delay: 1 pulled us below
+the 3s floor, which is the opposite of honouring the header. A single timeout
+value applies per socket read, so a host dribbling a byte every 14 seconds
+held the connection indefinitely, and the clock is only checked between shops,
+so one such host runs the job past the workflow timeout and loses the whole
+crawl.
+
+[IMPROVE] Every redirect hop goes through the crawler's own policy. There was
+no allow_redirects anywhere in the file, so requests followed up to 30 hops
+silently, and robots, the per host delay, the circuit breaker and the budget
+are all keyed on the host we asked for. This was live rather than
+theoretical: cavescarriere is configured as caves-carriere.fr and answers as
+www.caves-carriere.fr, so that shop had been crawled against a robots.txt
+nobody read. A 3xx now returns to get(), which re-enters itself for the
+destination. Following rather than refusing is load bearing, because six
+configured shops sit on a bare domain and refusing would take them dark.
+
+Verification of that last one mattered more than the others, because its
+failure mode is a shop going silent rather than a wrong number. Run 86 is the
+cold cache proof: 19 shops, all status ok, none blocked and none at zero
+products, 17312 listings against the pre-change 17301 and 133 hits against
+132. Every bare domain shop answered: cavescarriere, winenot 1233,
+vinnouveau 2823, lavinoterie 726, zuiverwijnen 699, levinnaturel 145,
+pangee 795. Nothing went dark, so the change stands.
+
+Three findings were held back because their evidence gate cannot be met yet,
+and each is recorded here rather than shipped on judgement.
+
+A robots.txt that answers 5xx is currently treated as allow all. Real, but
+the honest fix is to treat it as a shop that could not be read, and that needs
+its own coverage status first, otherwise a shop with a flaky robots endpoint
+silently becomes a shop we stopped crawling.
+
+The currency symbol is discarded after parsing, so a GBP or USD price would
+enter a EUR pool as if it were EUR. Inert today: every configured shop prices
+in EUR. It becomes real the moment a non EUR shop is probed, and that is the
+point to fix it.
+
+The market median is taken over records rather than over shops, so a shop
+listing a producer twenty times outweighs a shop listing it twice. I could
+not settle this one. It needs a before and after against the real observation
+pool, that pool only exists as a workflow artifact, and the artifact host is
+blocked from the environment I work in. It is also not clearly a defect:
+weighting by record and weighting by shop are two defensible estimates, and
+changing it moves references, which moves classifications, which is exactly
+where invariant 1 bites. It stays unshipped until the pool can be measured.
+
 ## Killed
 
 Flip Ganevat's default line to negoce_unclassified. Killed by invariant 1.
@@ -160,9 +240,16 @@ per page for the struck through price removal and the extra stock reads,
 measured on four real fixtures, which is about 6.5 seconds on a cold pass.
 Worst case moves from about 27m56s to about 28m03s.
 
-The live dry run started at 22:46 UTC on the committed tree. Status at the
-time of writing: still in the crawl step, no exception so far, artifact
-upload pending.
+Measured after the review findings below, on a deliberately cold cache
+(run 86, FRESH=1, DRY_RUN=1): 29m46s, of which 28m46s is the crawl step. The
+immediately preceding cold run on the pre-review tree (run 85) took 29m04s,
+and the observed cold band across runs 57 to 85 is 14m35s to 29m04s, so the
+difference is inside normal variance rather than a cost of the changes. The
+budget never bound: no out of time message, no shop unreached, no catalogue
+marked TRUNCATED, and every paged catalogue read to its own stated total
+(vinnouveau 118 of 118, winenot 104 of 104, cavepurjus 10 of 10,
+demainlesvins 4 of 4). MAX_RUN_SECONDS 2700 and the 70 minute workflow
+timeout both hold with margin.
 
 ## Open question
 
