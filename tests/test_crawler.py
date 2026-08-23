@@ -187,13 +187,29 @@ def test_budget_exceeded_stops_before_network_call(monkeypatch, tmp_cache):
         return FakeResp(200, '{"ok": true}')
 
     monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
-    c = make_crawler(tmp_cache, max_requests=1)
+    # Two, not one: robots.txt is a real request to a real host and is now
+    # counted, so the first page of a new host costs two units. Counting it
+    # is the point -- a run previously made about one uncounted request per
+    # host, and at max_requests=1 it still went to the network, which left
+    # the budget untestable at exactly its own boundary.
+    c = make_crawler(tmp_cache, max_requests=2)
 
     first = c.get("https://shop.example.com/a.json")
     assert first.status_code == 200
 
     with pytest.raises(crawler_mod.BudgetExceeded):
         c.get("https://shop.example.com/b.json")
+
+
+def test_robots_txt_counts_against_the_budget(monkeypatch, tmp_cache):
+    """The budget is a promise about outbound requests, not about some of
+    them. At max_requests=1 the robots fetch alone exhausts it."""
+    monkeypatch.setattr(crawler_mod.requests, "get",
+                        lambda url, headers=None, timeout=None: FakeResp(200, "User-agent: *\n"))
+    c = make_crawler(tmp_cache, max_requests=1)
+    with pytest.raises(crawler_mod.BudgetExceeded):
+        c.get("https://shop.example.com/a.json")
+    assert c.request_count == 1
 
 
 def test_min_delay_enforced_between_requests_to_same_host(monkeypatch, tmp_cache):

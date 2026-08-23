@@ -660,6 +660,21 @@ HTTP header or printed.
   exactly like a broken scraper and is not one. Asking for 24 runs to receive
   10 only adds queue pressure, so the schedule asks for what it can get, and a
   `concurrency` group keeps a delayed run from overlapping the next one.
+- Every outbound request counts against the budget, robots.txt included. It
+  was not counted, so a run made about one uncounted request per host --
+  roughly 19 against a 400 budget sized from a measured 311-request pass --
+  and `MAX_REQUESTS_PER_RUN=1` still went to the network, which left the
+  budget untestable at its own boundary. It is deliberately not behind
+  `_wait_for_host`: robots.txt must be readable before that host's
+  `Crawl-delay` is known.
+- `Crawl-delay` is honoured upwards only. `or MIN_DELAY_SECONDS` let a shop
+  publishing `Crawl-delay: 1` pull us *below* the 3s floor this file
+  documents, which is the opposite of honouring the header.
+- The connect timeout is separate from the read timeout. A single `timeout=`
+  applies per socket read, so a host dribbling a byte every 14 seconds holds
+  the connection indefinitely -- and `MAX_RUN_SECONDS` is only checked
+  between shops, so one such host runs the job past `timeout-minutes` and
+  loses the whole crawl: no `hits.json`, no email, a red run, no explanation.
 - The run stops itself on wall clock as well as on requests. Reading all 23
   shops to the end of their catalogues is 311 requests and ~28 minutes cold
   (vinnouveau's 118 pages are most of it); a job killed at the runner's

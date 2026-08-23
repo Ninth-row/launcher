@@ -48,6 +48,12 @@ CACHE_TTL_SECONDS = 6 * 3600
 #
 # Most runs cost far less than a full pass. A cache hit returns before the
 # budget check, so with a 6h TTL the crawl is only paid four times a day.
+# Separate from the read timeout. A single `timeout=` value applies to each
+# socket read, so a host dribbling one byte every 14 seconds holds the
+# connection indefinitely -- and MAX_RUN_SECONDS is only checked between
+# shops, so one such host can run the job past the workflow timeout and lose
+# the whole crawl: no hits.json, no email, a red run and no explanation.
+CONNECT_TIMEOUT = 5
 DEFAULT_MAX_REQUESTS_PER_RUN = 400
 DEFAULT_CACHE_DIR = Path(__file__).parent / ".cache"
 
@@ -287,7 +293,16 @@ class Crawler:
         rp = urllib.robotparser.RobotFileParser()
         rp.set_url(robots_url)
         try:
-            resp = requests.get(robots_url, timeout=TIMEOUT, headers={"User-Agent": self.user_agent})
+            # Counted, because it is a real request to a real host. It was
+            # not, so a run made about one uncounted request per host --
+            # roughly 19 against a 400 budget sized from a measured
+            # 311-request pass -- and MAX_REQUESTS_PER_RUN=1 still went to
+            # the network, which makes the budget untestable at its own
+            # boundary. Deliberately not behind _wait_for_host: robots.txt
+            # has to be readable before that host's Crawl-delay is known.
+            self.request_count += 1
+            resp = requests.get(robots_url, timeout=(CONNECT_TIMEOUT, TIMEOUT),
+                                headers={"User-Agent": self.user_agent})
             # Keep what it said. A disallow is otherwise undiagnosable: the
             # rules that refuse a URL live behind the same refusal, so
             # `--capture https://host/robots.txt` is itself disallowed and we
@@ -313,7 +328,11 @@ class Crawler:
     # -- rate limiting --------------------------------------------------
 
     def _wait_for_host(self, host):
-        min_delay = self._crawl_delay.get(host) or MIN_DELAY_SECONDS
+        # A floor, not a default. `or` let a shop publishing Crawl-delay: 1
+        # pull us *below* the 3s minimum this project documents as its
+        # politeness floor, which is the opposite of honouring the header.
+        # A longer published delay is still honoured.
+        min_delay = max(self._crawl_delay.get(host) or 0, MIN_DELAY_SECONDS)
         last = self._last_request_at.get(host)
         if last is not None:
             wait = min_delay - (time.monotonic() - last)
@@ -431,7 +450,8 @@ class Crawler:
             self._wait_for_host(host)
             self.request_count += 1
             try:
-                resp = requests.get(full_url, headers=headers, timeout=TIMEOUT)
+                resp = requests.get(full_url, headers=headers,
+                                    timeout=(CONNECT_TIMEOUT, TIMEOUT))
             except requests.RequestException as e:
                 last_exc = e
                 self._last_request_at[host] = time.monotonic()
