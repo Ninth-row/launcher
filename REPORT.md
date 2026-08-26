@@ -253,9 +253,12 @@ timeout both hold with margin.
 
 ## Open question
 
-Eight of the 19 shops have never produced a hit, and four of them are large:
-lacavedespapilles at 1241 listings, purewijnen at 867, puurwijnshop at 709,
-zuiverwijnen at 689. They are roughly a third of the crawl for nothing so far.
-Do you want them kept as insurance against a future allocation landing there,
-or should I drop the ones that have never stocked a watched producer and put
-the budget into reading the productive shops more often?
+Eight of the 19 shops had never produced a hit, and four of them were large:
+lacavedespapilles at 1240 listings, purewijnen at 867, puurwijnshop at 709,
+zuiverwijnen at 699. Together roughly a third of the crawl for nothing.
+
+Answered in part: puurwijnshop is removed, which returns 709 listings and 3
+pages to the budget. The other seven are kept for now. The question stays
+open for them, and it is worth revisiting once a full cold pass is cheaper,
+because insurance against a future allocation is only worth its cost while
+the budget is not binding. It is not binding today.

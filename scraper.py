@@ -441,12 +441,6 @@ SHOPS = [
         "verified": True,
     },
     {
-        "name": "puurwijnshop",
-        "platform": "shopify",
-        "url": "https://www.puurwijn.shop",
-        "verified": True,
-    },
-    {
         "name": "lavinoterie",
         "platform": "shopify",
         "url": "https://lavinoterie.fr",
