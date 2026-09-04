@@ -8,10 +8,11 @@ name: Apply Config Issue
 # a price" was pure ceremony.
 #
 # SECURITY: this repo is public, so anyone can open an issue and issue forms
-# apply their own labels. The job refuses to run unless the issue author is
-# the repo OWNER -- otherwise a stranger could drive edits to scraper.py.
-# apply_issue.py independently rejects hostile values (quote injection, path
-# traversal, non-https URLs); this gate is the outer of the two.
+# apply their own labels. The job refuses to act unless the issue author
+# actually holds write access to this repository -- otherwise a stranger
+# could drive edits to scraper.py. apply_issue.py independently rejects
+# hostile values (quote injection, path traversal, non-https URLs); the
+# permission check below is the outer of the two.
 on:
   issues:
     types: [opened, labeled]
@@ -25,26 +26,69 @@ jobs:
     # Matches on the form's own headings as well as the label. GitHub only
     # applies a template's labels if they already exist in the repo, so a
     # missing label silently skipped a correctly-submitted form -- which is
-    # exactly what happened to issue #20. The OWNER check is the security
-    # gate and is unaffected; the heading match just identifies which form.
-    # OWNER *or* MEMBER, because those are the same person under two
-    # different ownership models and neither is a name. A personal repo calls
-    # its owner OWNER; a repo owned by an organisation has no OWNER at all --
-    # its people are MEMBER -- so an OWNER-only gate stops applying every
-    # config change the moment the project moves to an org, silently and
-    # without failing anything. MEMBER cannot appear on a personal repo, and
-    # org membership is invite-only, so this widens nothing: on a solo org it
-    # still means exactly one person.
+    # exactly what happened to issue #20. This condition only identifies
+    # which form was submitted. The security gate is the permission check
+    # that runs as the first step of the job.
+    #
+    # author_association used to be that gate and must never be one again.
+    # It is not a permission, it is a *visibility*: on a repo owned by an
+    # organisation, a member whose org membership is set to private is
+    # reported as CONTRIBUTOR or NONE, so an owner with full admin rights
+    # fails an OWNER-or-MEMBER test. This project moved to an org and every
+    # single run of this workflow concluded "skipped" from then on -- ten of
+    # them, across five issues, each one a form the owner had filled in
+    # correctly. A skipped job posts no comment and shows no red tick, so
+    # the failure was invisible from both the issue and the dashboard.
     if: >
-      (github.event.issue.author_association == 'OWNER' ||
-       github.event.issue.author_association == 'MEMBER') &&
-      (contains(github.event.issue.labels.*.name, 'add-producer') ||
-       contains(github.event.issue.labels.*.name, 'add-shop') ||
-       contains(github.event.issue.body, '### Producer name') ||
-       contains(github.event.issue.body, '### Short name'))
+      contains(github.event.issue.labels.*.name, 'add-producer') ||
+      contains(github.event.issue.labels.*.name, 'add-shop') ||
+      contains(github.event.issue.body, '### Producer name') ||
+      contains(github.event.issue.body, '### Short name')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # The security gate. Asks GitHub what the author may actually do here
+      # rather than inferring it from a label they applied to themselves or
+      # from an association that depends on a profile setting.
+      #
+      # admin and maintain only. Plain write is deliberately excluded and
+      # must stay excluded: someone given push access to help is not someone
+      # who should be able to drive an unreviewed commit to main from an
+      # issue form. That was the old gate's policy and it is still right;
+      # only its mechanism was broken.
+      #
+      # It runs before anything reads the issue body, so an unauthorised
+      # issue costs one API call and stops. It also says so on the issue:
+      # the whole point of this rewrite is that a refusal is visible.
+      - name: Check the author may change config
+        id: authz
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const actor = context.payload.issue.user.login;
+            const assoc = context.payload.issue.author_association;
+            let level = 'none';
+            try {
+              const res = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner, repo: context.repo.repo,
+                username: actor,
+              });
+              level = res.data.permission;
+            } catch (e) {
+              core.info(`permission lookup failed for ${actor}: ${e.status}`);
+            }
+            core.info(`author=${actor} association=${assoc} permission=${level}`);
+            if (['admin', 'maintain'].includes(level)) return;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `Not applied: **@${actor}** does not have admin access to this `
+                + `repository, so this form cannot change the config `
+                + `(permission reported as \`${level}\`).`
+                + "\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_",
+            });
+            core.setFailed(`${actor} has permission "${level}"; admin access required.`);
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -149,8 +193,11 @@ jobs:
               issue_number: context.issue.number, state: 'closed',
             });
 
+      # Skipped when the permission check is what failed: that step has
+      # already said why, precisely, and two bot comments on one refusal is
+      # noise on a public repo.
       - name: Report failure on the issue
-        if: failure()
+        if: failure() && steps.authz.outcome != 'failure'
         uses: actions/github-script@v7
         with:
           script: |

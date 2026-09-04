@@ -163,28 +163,55 @@ def test_the_scraper_forces_a_report_only_for_a_dispatched_run():
     assert "schedule" not in env["FORCE_REPORT"]
 
 
-def test_the_config_form_is_gated_on_who_opened_the_issue():
+def _apply_config():
+    return (Path(__file__).parent.parent / ".github" / "workflows"
+            / "apply-config.yml")
+
+
+def test_the_config_form_is_gated_on_the_author_real_permission():
     """apply-config.yml commits to main without a PR, so this gate is the only
-    thing between a stranger's issue and the default branch. It must survive a
-    move to an organisation: a personal repo calls its owner OWNER, an org
-    repo has no OWNER at all and calls its people MEMBER, so an OWNER-only
-    test would fail closed on every config change after the move -- silently,
-    because nothing errors."""
-    body = (Path(__file__).parent.parent / ".github" / "workflows"
-            / "apply-config.yml").read_text()
-    gate = body[body.index("if: >"):body.index("runs-on")]
-    assert "author_association" in gate
-    assert "'OWNER'" in gate and "'MEMBER'" in gate
-    # Never a name: the point of the move is that no identity is embedded.
+    thing between a stranger's issue and the default branch.
+
+    It asks GitHub what the author may actually *do* here. It must never go
+    back to author_association, which is a visibility rather than a
+    permission: on an org-owned repo a member whose org membership is private
+    is reported CONTRIBUTOR or NONE, so an OWNER-or-MEMBER test locks out an
+    admin. This project moved to an org and every run of this workflow
+    concluded "skipped" from then on, which posts no comment and shows no red
+    tick, so five correctly-filled forms were lost in silence."""
+    doc = yaml.safe_load(_apply_config().read_text())
+    step = doc["jobs"]["apply"]["steps"][0]
+    assert step["id"] == "authz", "the permission check must be the first step"
+    script = step["with"]["script"]
+    assert "getCollaboratorPermissionLevel" in script
+    assert "core.setFailed" in script, "an unauthorised author must fail the job"
+    gate = _apply_config().read_text()
+    gate = gate[gate.index("if: >"):gate.index("runs-on")]
+    assert "author_association" not in gate, (
+        "author_association is a profile visibility, not a permission")
+    # Never a name: no identity is embedded in this project.
     assert "github.event.issue.user.login ==" not in gate
 
 
 def test_the_gate_admits_no_one_else():
-    """CONTRIBUTOR and NONE are strangers. COLLABORATOR is deliberately out
-    too -- someone given push access to help is not someone who should be able
-    to drive an unreviewed commit to main from an issue form."""
-    body = (Path(__file__).parent.parent / ".github" / "workflows"
-            / "apply-config.yml").read_text()
-    gate = body[body.index("if: >"):body.index("runs-on")]
-    for role in ("CONTRIBUTOR", "COLLABORATOR", "NONE", "FIRST_TIME"):
-        assert f"'{role}'" not in gate, f"{role} can drive a commit to main"
+    """Plain write is deliberately out -- someone given push access to help is
+    not someone who should be able to drive an unreviewed commit to main from
+    an issue form. read and triage are strangers for this purpose."""
+    doc = yaml.safe_load(_apply_config().read_text())
+    script = doc["jobs"]["apply"]["steps"][0]["with"]["script"]
+    allowed = script[script.index("includes(level)") - 60:
+                     script.index("includes(level)")]
+    assert "'admin'" in allowed
+    for role in ("'write'", "'triage'", "'read'", "'none'"):
+        assert role not in allowed, f"{role} can drive a commit to main"
+
+
+def test_an_unauthorised_form_is_refused_out_loud():
+    """The bug this replaces was silent: a skipped job comments nothing. A
+    refusal now says so on the issue, and the generic failure reporter stands
+    down so one refusal is one comment."""
+    doc = yaml.safe_load(_apply_config().read_text())
+    steps = doc["jobs"]["apply"]["steps"]
+    assert "createComment" in steps[0]["with"]["script"]
+    reporter = next(s for s in steps if s.get("name") == "Report failure on the issue")
+    assert "steps.authz.outcome != 'failure'" in reporter["if"]
