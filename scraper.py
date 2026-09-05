@@ -426,15 +426,6 @@ SHOPS = [
         "verified": False,
     },
     {
-        "name": "vinnaturelbe",
-        "platform": "html",
-        "url": "https://vin-naturel.be",
-        "item_selector": "div.product",
-        "title_selector": "h2.product-title",
-        "price_selector": "span.price",
-        "verified": False,
-    },
-    {
         "name": "zuiverwijnen",
         "platform": "shopify",
         "url": "https://zuiverwijnen.nl",
