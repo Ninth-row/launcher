@@ -1040,3 +1040,53 @@ def test_a_probe_with_no_deadline_is_unchanged():
             "price_selector": "span.price", "verified": False}
     result = probe.probe_shop(shop, Dead({}))
     assert result["status"] in ("failed", "host_unreachable")
+
+
+# --- A probe that found nothing must commit nothing -----------------------
+#
+# PrestaShop stamps a fresh `?v=NNNNN` on every asset link per request, so
+# re-saving an unchanged page rewrote every one of them and swung the byte
+# count in our own header. The probe workflow commits whenever any file
+# differs, so seventeen of the last twenty probe commits were pure churn --
+# seven vinnaturelbe captures and a dashboard timestamp -- each announcing
+# that platforms had been corrected and shops verified.
+
+def test_an_unchanged_page_is_not_rewritten(tmp_path, monkeypatch):
+    monkeypatch.setattr(probe, "DIAGNOSTIC_DIR", tmp_path)
+    page = ('<html><head>'
+            '<link href="/css/global.css?v=%d" rel="stylesheet"/>'
+            '<link href="/css/theme.css?v=%d" rel="stylesheet"/>'
+            '</head><body><p>Nothing priced here</p></body></html>')
+    probe.save_diagnostic_page("zzzshop", "https://zzz.example/", page % (34057, 54669))
+    written = next(tmp_path.glob("*.html"))
+    first = written.read_text()
+    before = written.stat().st_mtime_ns
+
+    # The same page, one request later: new cache-busters, same content.
+    probe.save_diagnostic_page("zzzshop", "https://zzz.example/", page % (11111, 22222))
+    assert written.read_text() == first, "an unchanged page was rewritten"
+    assert written.stat().st_mtime_ns == before, "the file was touched"
+
+
+def test_a_real_change_still_lands(tmp_path, monkeypatch):
+    monkeypatch.setattr(probe, "DIAGNOSTIC_DIR", tmp_path)
+    probe.save_diagnostic_page(
+        "zzzshop", "https://zzz.example/",
+        '<html><body><link href="/a.css?v=1" rel="stylesheet"/>'
+        '<p>Nothing priced here</p></body></html>')
+    written = next(tmp_path.glob("*.html"))
+
+    probe.save_diagnostic_page(
+        "zzzshop", "https://zzz.example/",
+        '<html><body><link href="/a.css?v=2" rel="stylesheet"/>'
+        '<div class="product">Ganevat Chalasses 91,00 EUR</div></body></html>')
+    assert "Ganevat" in written.read_text(), "a real change was suppressed"
+
+
+def test_the_probe_only_claims_verification_when_config_changed():
+    """The commit message is how someone finds the run that verified a shop.
+    One that always claims it is one nobody can search."""
+    body = (Path(__file__).parent.parent / ".github" / "workflows"
+            / "probe.yml").read_text()
+    assert 'grep -qx "scraper.py"' in body, "the message no longer checks config"
+    assert "changed no shop config" in body

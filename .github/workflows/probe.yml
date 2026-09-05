@@ -115,11 +115,24 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Verify shops from probe run $RUN_ID
-
-          Real responses fetched and parsed in this run; fixtures saved
+          # Say what this run actually did. The message used to announce that
+          # platforms were corrected and shops verified on every commit, and
+          # seventeen of the last twenty commits changed no config at all --
+          # they were re-saved diagnostic captures and a dashboard timestamp.
+          # A commit log that always claims a result cannot be used to find
+          # the run that produced one.
+          if git diff --cached --name-only | grep -qx "scraper.py"; then
+            SUBJECT="Verify shops from probe run $RUN_ID"
+            DETAIL="Real responses fetched and parsed in this run; fixtures saved
           (trimmed, keeping producer matches), platforms corrected and
           verified set true. Tests passed before this commit."
+          else
+            SUBJECT="Probe run $RUN_ID changed no shop config"
+            DETAIL="Real responses fetched and parsed, but no shop changed platform
+          or became verified. Committed for the captures and generated files
+          only. Tests passed before this commit."
+          fi
+          git commit -m "$SUBJECT" -m "$DETAIL"
 
           # A probe takes minutes, and anything pushed to the branch
           # meanwhile makes the push a non-fast-forward. Losing a verified
