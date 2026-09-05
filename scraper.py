@@ -540,7 +540,19 @@ SHOPS = [
         "name": "mesbourgognes",
         "platform": "html",
         "url": "https://mesbourgognesbeaune.com",
-        "catalog_paths": ["fr/12-bourgogne", "fr/26-les-vins", "fr/nouveaux-produits", "fr/64-beaujolais", "fr/69-jura"],
+        # One catalogue, not five, because the shop's own banners say the five
+        # overlap. Run 33978596532 printed what each states on its page one:
+        # bourgogne 292 over 25 pages, les-vins 339 over 29, nouveaux-produits
+        # 106 over 9, beaujolais 18 over 2, jura 16 over 2 -- 67 pages walked
+        # for 329 unique products. les-vins states *more* on its own (339)
+        # than all five yielded together, and bourgogne + beaujolais + jura is
+        # 326 of it, so it is the union and the rest are its regions plus a
+        # new-arrivals strip. Reading it alone is 29 pages for more wine, and
+        # it lets the coverage row state a real fraction instead of a total
+        # summed from overlapping categories. This is the winenot lesson
+        # (six colour filters where the menu linked all six at once), and the
+        # probe records paths that merely parsed, so it cannot spot the union.
+        "catalog_path": "fr/26-les-vins",
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
