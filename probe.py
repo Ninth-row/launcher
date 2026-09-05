@@ -117,6 +117,36 @@ class CannedCrawler:
 DIAGNOSTIC_DIR = Path(__file__).parent / "probe_pages"
 DIAGNOSTIC_CAP = 300_000
 
+# What a page changes on every request without changing what it says.
+# PrestaShop stamps a fresh cache-busting version on every asset link
+# (`global.css?v=34057`), so re-saving an identical page produced a diff on
+# every one of them plus a four-byte swing in the byte count -- and the probe
+# workflow commits whenever any file differs. Seventeen of the last twenty
+# probe commits touched no config at all: they were seven vinnaturelbe
+# captures and a dashboard timestamp, committed under a message announcing
+# that platforms had been corrected and shops verified. That churn is what
+# makes the probe look unstable when it is merely idle.
+VOLATILE_IN_CAPTURE = re.compile(
+    r"[?&](?:v|ver|rev|_|t|cb|cache)=\d+"   # asset cache-busters
+    r"|\b\d+(?= bytes)"                     # the byte count in our own header
+)
+
+
+def _write_if_changed(path, text):
+    """Write only when the page actually says something different.
+
+    A capture is a diagnostic, not a fixture, so leaving a byte-identical one
+    alone costs nothing and stops the probe committing noise. Only the
+    volatile tokens above are ignored; any real structural change still
+    differs elsewhere and still lands.
+    """
+    if path.exists():
+        old = path.read_text()
+        if VOLATILE_IN_CAPTURE.sub("", old) == VOLATILE_IN_CAPTURE.sub("", text):
+            return False
+    path.write_text(text)
+    return True
+
 
 def _page_slug(url):
     parts = urlparse(url)
@@ -161,7 +191,8 @@ def save_diagnostic_text(name, url, text, byte_count, page_count):
     DIAGNOSTIC_DIR.mkdir(parents=True, exist_ok=True)
     host = urlparse(url).netloc.replace(".", "-")
     path = DIAGNOSTIC_DIR / f"{name}.{host}.{_page_slug(url)}.txt"
-    path.write_text(
+    _write_if_changed(
+        path,
         f"# {url}\n# {byte_count} bytes of PDF, {page_count} page(s), extracted "
         f"with pypdf.\n# Diagnostic only: delete once this shop parses.\n\n"
         + redact_contacts(text[:DIAGNOSTIC_CAP])
@@ -227,7 +258,7 @@ def save_diagnostic_page(name, url, body):
     # its own punctuation re-escaped: unreadable, and unusable as a fixture.
     # Save it as it arrived.
     if looks_like_json(body):
-        (DIAGNOSTIC_DIR / f"{stem}.json").write_text(body[:DIAGNOSTIC_CAP])
+        _write_if_changed(DIAGNOSTIC_DIR / f"{stem}.json", body[:DIAGNOSTIC_CAP])
         return
 
     soup = BeautifulSoup(body, "html.parser")
@@ -262,7 +293,8 @@ def save_diagnostic_page(name, url, body):
     if len(trimmed) > DIAGNOSTIC_CAP:
         trimmed = str(soup)
     trimmed = trimmed[:DIAGNOSTIC_CAP]
-    (DIAGNOSTIC_DIR / f"{stem}.html").write_text(
+    _write_if_changed(
+        DIAGNOSTIC_DIR / f"{stem}.html",
         f"<!-- {url}\n     {describe_unparsed(body)}\n"
         f"     Styles and behaviour-only scripts stripped, data scripts kept\n"
         f"     (capped at {DATA_SCRIPT_CAP} bytes each); file capped at\n"
