@@ -391,12 +391,6 @@ SHOPS = [
         "verified": False,
     },
     {
-        "name": "petitescaves",
-        "platform": "shopify",
-        "url": "https://www.petitescaves.com",
-        "verified": True,
-    },
-    {
         "name": "cavepurjus",
         "platform": "html",
         "url": "https://www.cavepurjus.com",
