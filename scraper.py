@@ -391,12 +391,6 @@ SHOPS = [
         "verified": False,
     },
     {
-        "name": "petitescaves",
-        "platform": "shopify",
-        "url": "https://www.petitescaves.com",
-        "verified": True,
-    },
-    {
         "name": "cavepurjus",
         "platform": "html",
         "url": "https://www.cavepurjus.com",
@@ -420,15 +414,6 @@ SHOPS = [
         "name": "naturavin",
         "platform": "html",
         "url": "https://www.naturavin.be",
-        "item_selector": "div.product",
-        "title_selector": "h2.product-title",
-        "price_selector": "span.price",
-        "verified": False,
-    },
-    {
-        "name": "vinnaturelbe",
-        "platform": "html",
-        "url": "https://vin-naturel.be",
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
@@ -555,10 +540,11 @@ SHOPS = [
         "name": "mesbourgognes",
         "platform": "html",
         "url": "https://mesbourgognesbeaune.com",
+        "catalog_paths": ["fr/12-bourgogne", "fr/26-les-vins", "fr/nouveaux-produits", "fr/64-beaujolais", "fr/69-jura"],
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
-        "verified": False,
+        "verified": True,
     },
 ]
 
