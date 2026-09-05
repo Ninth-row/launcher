@@ -1,178 +1,236 @@
-# Round 3 — the shops that still don't deliver
+# Pricing review and implementation plan
 
-Four council seats (platform archaeologist, crawl-budget architect, red-team
-skeptic, robustness engineer — the last died mid-report to a session limit and
-its ground was covered by the other three), one live coverage run, and one live
-capture probe of nine pages nobody had ever looked at.
+## Verdict
 
-Everything below is either reproduced locally against `probe_pages/` and
-`tests/fixtures/`, or measured on a runner.
+Your instinct is right, and the cause is specific: there are two different
+pricing systems in the digest and the dominant one is broken in three ways.
 
----
+Ganevat is the only producer with `lines:` in `prices.yaml`, and a banded
+producer takes an early return in `evaluate.py` that never reaches
+`market.py`. That path cannot ever say HIGH, it uses a different definition
+of DEAL from every other producer, and it prints a number to you that is not
+the number it compared. Ganevat is most of what this scraper finds, so most
+of what you read comes from the broken path.
 
-## What the evidence actually says
+One thing I expected to find and did not: the demainlesvins title and URL
+disagree, and it is not a bug. Detail in "Checked and cleared" below. Do not
+spend time on it.
 
-### The bug that reorders the whole plan
+Everything here was reproduced offline against committed fixtures. 748 tests
+pass on the branch as it stands.
 
-`parse_price("Ganevat Poulprix 2022 €45,00")` returns **2022.0**.
+## How this was tested
 
-`PRICE_PATTERN`'s second branch, `(\d{1,4}(?:[.,]\d{2})?)\s?(?:€|EUR|USD|\$)`,
-matches the vintage, the space, and the *following* price's currency symbol.
-It has never fired because every verified HTML shop is French and writes
-`45,00 €` — number first. Symbol-first is Belgian and Dutch usage, and every
-shop this plan would enable is Belgian or Dutch.
+Every verified fixture was run through the real
+`check_shop` -> `evaluate_hit` -> `market.observation` path with a stubbed
+crawler and no network, producing 20 real hits, and each hit's pricing
+decision was dumped with its reference, expected price and ratio. The two
+PDF shops were skipped because `pypdf` cannot import in this sandbox; they
+are unaffected by everything below.
 
-The blast radius is not local. `market.py` keeps observations 180 days and
-`MIN_SHOPS = 1`, so one poisoned observation makes another shop's honest €44
-bottle a DEAL; the correction later reads as a 97.8% price drop, which bypasses
-the cooldown by design. One bad night, two false alerts, six months of poisoned
-reference.
+## Findings
 
-**A precondition for every other item, not a line item.**
+### P1. A banded producer can never be classified HIGH. Verified.
 
-### Two shops are not broken, they are challenged
+`evaluate.py:286` is the whole of it:
 
-The capture probe settled both, and neither diagnosis was on the table:
+```python
+classification="DEAL" if price750 < band else "FAIR",
+```
 
-- `vinnaturel.fr` returns **HTTP 200** with `<title>One moment, please...</title>`
-  and "Please wait while your request is being verified..." — a JS bot
-  challenge. Not a dead domain, not an outage, not the wrong TLD.
-- `vinopura.nl` returns **HTTP 200**, 221 bytes, meta-refresh to
-  `/.well-known/sgcaptcha/` — SiteGround's captcha. That, not a Store API
-  change, is the "parse error" in two consecutive runs.
+There is no HIGH branch. Measured, same wine, same ratio, both paths:
 
-The honest report for both is *blocked*; today it says `ok, 0 products` for one
-and `parse error` for the other. A 200 that is a challenge page is a failure
-class the code has no name for — and it lands in the 6h disk cache, so one
-challenge poisons six runs.
+| Listing | Path | Ratio | Class |
+|---|---|---|---|
+| Ganevat Chalasses at EUR 2000 | band | 25.0 | FAIR |
+| Labet Chardonnay at EUR 2000 | market | 25.0 | HIGH |
 
-We do not evade challenges. We name them.
+Real fixture rows landing in the same trap: Ganevat "Les Grandes Teppes" at
+EUR 199 against the EUR 80 domaine band, ratio 2.49, reported FAIR. Ganevat
+Vin Jaune 2012 at a per-750 equivalent of EUR 142, ratio 1.78, reported FAIR.
 
-### One generic parser bug hides a whole shop
+Consequence: for the producer you watch most closely, an overpriced bottle
+is indistinguishable from a correctly priced one. HIGH exists in the codebase
+but is unreachable for Ganevat.
 
-`autoselect._price_nodes` accepts an element only when its **own** text carries
-a currency-adjacent price. WooCommerce — and most theme families — render
-`<span class="amount">12.50<span class="currencySymbol">€</span></span>`, so the
-digits and the marker sit in different elements and *no* element qualifies. The
-entire grid is invisible.
+### P2. Two incompatible definitions of DEAL in one email. Verified.
 
-Measured over all 28 captures: an innermost-full-text rule takes
-`vinovivo.shop.html` from **0 → 10 products** and leaves **24 of 28 files
-byte-identical** (the three other changes are vinovivo's own pages).
+The band path calls DEAL anything below the band, an implicit threshold of
+1.0. The market path uses `deal_threshold: 0.85`. Measured:
 
-That, not selectors and not a platform route, is what makes vinovivo readable.
-
-### What the shops are, on tested evidence
-
-| shop | platform | verdict |
+| Price vs reference | Band path | Market path |
 |---|---|---|
-| vinovivo | WooCommerce 3.4.8 | **readable** once `_price_nodes` and the next-link rule land. `/shop`, 315 products, 10/page, `/shop/page/N` confirmed live on page 2. |
-| purovino | Squarespace Commerce | **readable** via `?format=json`: ~96 items in **one request**, with `title`, `fullUrl`, `variants[].priceMoney.value`, `qtyInStock`. |
-| vinnaturelbe | PrestaShop 1.6 | **unreadable**. The real catalogue (`/fr/categorie/11-acheter-en-ligne`, 61KB, 40 product links) has **zero currency markers**. Price wall or catalogue mode. |
-| purewijnen | Drupal 7, no commerce module | **unreadable**. `/nl/wijnen-bestellen` and `/nl/wijnkaart` both **zero prices**, on top of the grower bio's 0-in-28KB. |
-| leszinzinsduvin | hand-rolled PHP | **already correct**. Prices *are* on the grower pages (`110,00 €` on Labet's); Ganevat simply has no bottles listed. "8 products, all sold out" is the right answer. |
-| naturavin / vinscheznous | — | 403 / no DNS. Unchanged. |
+| ratio 0.988 | DEAL | FAIR |
+| ratio 1.012 | FAIR | FAIR |
 
-Two of those are deletions of a hope, written down as a tested reason. That is
-a result: four shops already carry exactly that.
+A bottle one percent under its reference is a DEAL if it is a Ganevat and a
+FAIR if it is anything else. The word DEAL in your inbox means two different
+things depending on the row.
 
-### Coverage is worse than the table admits, and the table lies when the budget binds
+### P3. The digest prints a number it did not compare. Verified.
 
-- **vinnouveau**: its own page says `Affichage 1-24 de 2827 article(s)` and
-  links `?page=118`. We read 480 — **17%**.
-- **pangee**: still pointed at `/nouveaux-produits` (91) while `/fr/25-vins`
-  holds **791** — the exact "a strip is one page, a catalogue runs to twenty"
-  bug CLAUDE.md says the probe was rewritten to stop making.
-- **winenot**: `fetch_html` spends one shared 20-page budget over
-  `catalogue_starts()` **in fixed list order**, so rosé, sparkling, moelleux and
-  muté have never been read once, at any budget.
-- **`shop_order()`** computes `hour % len(shops)` with 29 shops, so offsets
-  24-28 never occur: five shops can never lead a run. The test that claims
-  otherwise runs against the 3-shop canned list and passes vacuously.
-- **When the budget binds, the digest lies.** Reproduced at `max_requests=1`:
-  unfetched shops vanish from the coverage table entirely and their producers
-  are reported under "Watched but found nowhere" — the one note whose whole
-  purpose is to mean "this alias matches nothing".
+`notify.py:268` prints `hit["price"]`, the raw listing price.
+`notify.py:269` and `notify.py:452` print `hit["expected_price"]`, which on
+the band path is the per-750 band. For anything that is not a 750ml bottle
+those two numbers are not comparable, and the email computes a percentage
+between them anyway (`pct = price / ref - 1`).
 
----
+The live run on 23 August printed this row:
 
-## The plan
+```
+DEAL | Ganevat | Le Pt'iot Roukin 2023 Magnum | 1500ml | EUR 89 | EUR 80
+```
 
-Ordered so each step is safe alone, and nothing that could produce a *wrong*
-number ships before the guard that stops it.
+Read plainly that says: costs 89, reference 80, therefore a deal. The
+comparison the code actually made was 38.70 against 80. The magnum is a
+genuine deal and the row gives you no way to see why. On the market path the
+expected price is scaled by the format multiplier, so it is comparable; only
+the band path is wrong. This is the finding most likely to be what made the
+pricing feel broken.
 
-1. **Vintage guard on `PRICE_PATTERN`** (blocks everything else). Reject a bare
-   4-digit year in the number-then-symbol branch. Keep `positive_price`. Do not
-   loosen whitespace anywhere.
-2. **Name a challenge page instead of believing it.** `crawler.py` detects an
-   interstitial (meta-refresh to a captcha path; a tiny "verifying your request"
-   body) and raises rather than returning a 200. **Never cache it.** `main()`
-   gets a `blocked (challenge)` status and a digest note. No UA spoofing, no
-   retry-until-through.
-3. **`_price_nodes`: innermost element whose full text holds the price**, with
-   the red-team's three guards — no descendant `<a>`, a length cap so prose is
-   not a price cell, `_block_for`'s climb untouched.
-4. **Stock from markup, not only text.** WooCommerce puts it in the `<li>` class
-   list and the card text is identical either way. Without this, vinovivo's
-   sold-out bottles are alerted *and* written to `seen.json`, which permanently
-   destroys the restock alert. The signal may only ever add out-of-stock, never
-   flip a listing to in stock; `products_parsed` must not change.
-5. **Next page by class token** (`next`, `suivant` as whole tokens): vinovivo's
-   next arrow is an empty `<a class="next page-numbers">`. Validated across 44
-   real pages: 6 correct hits, 0 false positives. **Not** numeric `/page/N`
-   guessing.
-6. **A 404 on page ≥ 2 ends a catalogue; it does not lose one.**
-   `_walk_pages` calls `raise_for_status()` outside its `try`, so one 404
-   discards every page already read and reports the shop `unreachable`.
-7. **Squarespace fetcher for purovino**, reading `variants[].priceMoney.value`
-   (the item-level `priceMoney` is `0.00` — reading it would make every bottle a
-   permanent DEAL), `qtyInStock`, `fullUrl`, `positive_price` on the way out,
-   cursor pagination. Prerequisites: an `EMPTY_PAGE` entry, a `trim_payload`
-   field whitelist (or `websiteSettings` — contact email, address, phone — gets
-   committed to a public repo), and **robots.txt read first**, because
-   `urllib.robotparser` ignores `*` wildcards and Squarespace writes
-   query-string exclusions in exactly that form.
-8. **Tell the truth when the budget binds.** Unreached shops get a
-   `STATUS = not reached` row; "found nowhere" is computed only over shops
-   actually fetched. Precondition for item 9.
-9. **Coverage arithmetic.** Monotonic hour counter in `shop_order` (+ a test
-   over the real `SHOPS`); rotate `catalogue_starts`; derive each catalogue's
-   real size from its own page-1 counter (free) and report
-   `pages_read/pages_total`; `MAX_REQUESTS_PER_RUN` 120 → 160 (the largest that
-   still fits 900s at a pessimistic 5.5s/request; past ~163 the clock binds and
-   the clock drops *whole shops*). `MAX_PAGES_PER_SHOP` stays 20 globally.
-10. **pangee's catalogue through the probe** — `/fr/25-vins`, set by
-    `probe.py --apply` against a real response, never by hand.
-11. **Write the tested verdicts into CLAUDE.md** — one sentence each for
-    purewijnen, vinnaturelbe, vinnaturel, vinopura, naming the page tested and
-    what it held.
+### P4. `price_750_eur` is computed for this exact purpose and never shown.
 
-## Explicitly not doing
+`evaluate.py:272` sets it, and its own comment says it is
+"recorded whatever happens next, so a digest row can show what the band was
+actually compared against". `grep` finds zero reads in `notify.py` and
+`dashboard.py`. The fix for P3 already exists as a field; nothing was wired
+to it.
 
-- **Looser price-whitespace matching.** Fixes nothing real (0 price nodes before
-  *and* after on vinovivo's actual markup — the problem is a tag boundary, not
-  indentation), only "fixes" our own prettified diagnostic artifact, and turns
-  `Clavelin 2016 EUR 250,00` from an honest `NOREF` into a confident 2016.0.
-- **Numeric pagination discovery** (item 5).
-- **Runtime platform re-detection.** Breaks what `verified` means; 12
-  requests/hour to re-ask what the probe already answers.
-- **Retrying vinopura.** A retry re-reads the poisoned cache entry, and a
-  partial retry launders a truncated catalogue into a "complete" one.
-- **Rotating page-offset cursors.** Unstable sort orders make the window skip
-  and duplicate silently; the notes flap hourly; a new state file is one
-  `git add -A` from being pinned for ever.
-- **Product-page fetching.** 315-330 requests for one shop; `autoselect` on a
-  product page reads the *related-products strip*; `NON_PRODUCT_PATH` does not
-  exclude `?add-to-cart=`, so following discovered links can perform
-  state-changing GETs.
-- **A global `MAX_PAGES_PER_SHOP` raise** without item 8.
+### P5. Vin jaune and Chateau-Chalon can only ever read FAIR.
 
-## Noted, not scheduled
+A clavelin is 620ml with a 0.83 multiplier, so its per-750 equivalent is its
+price times 1.21. Vin jaune is intrinsically dearer than the rest of the
+range, so it starts above a band derived from the range as a whole. Measured:
+EUR 118 becomes EUR 142.17 against an EUR 80 band. A clavelin would have to
+be under EUR 66 to read DEAL. Combined with P1 the result is that the most
+prized wines in the range are permanently FAIR, which is the one word that
+carries no information.
 
-- `urllib.robotparser` ignores `*` wildcards, so robots compliance is weaker
-  than it looks for query-string rules. Item 7 works around it by hand.
-- `notify.item_key` hashes the raw URL, so a shop with a rotating query
-  parameter would re-alert hourly. Not observed on any current shop.
-- `MIN_SHOPS = 1`: one observation sets a reference. The amplifier behind item 1.
-- `coverage.json` is tracked and holds test rows; `observations.json` is neither
-  tracked nor ignored, and two workflows run `git add -A`.
+### P6. `market.py` never runs for Ganevat. Not a defect, worth knowing.
+
+The band path returns before the observed-reference ladder. The observed
+price pool, which is the module the architecture document describes at
+greatest length, does not inform the producer that generates most hits. That
+is the intended design of `lines:`, but it means the pool's quality is
+invisible in practice and the "same wine at N shops" evidence you have is
+never used where you have the most data.
+
+## Checked and cleared
+
+**demainlesvins titles do not match their URLs, and that is the shop, not us.**
+Three of three hits showed it, for example a title of "Chalasses Vieilles
+Vignes Poulsard 2023 Magnum" linking to `enfant-terrible-poulsard-2016`. I
+expected a card-boundary parsing bug. It is not. Across all 300 cards in the
+fixture, 298 have a `data-id-product` that matches every product link inside
+the card; the two that differ are unrelated. The card is internally
+consistent and the slug is simply stale, because PrestaShop keeps the
+original URL rewrite when a shop edits an existing product record into a
+different wine. The numeric id is what resolves, so the link lands on the
+right page. No change needed. Do not "fix" the parser here.
+
+## Plan
+
+Ordered so that the zero-risk presentation fix lands first and nothing can
+lose a DEAL. Invariant: a listing that alerts today must still alert after
+every step.
+
+### Step 1. Show the number that was compared. No behaviour change.
+
+`notify.py`, both `format_row` and the HTML row builder.
+
+When `price_750_eur` is present and differs from `price` by more than a
+rounding step, render both: the listing price, the per-750 equivalent, and
+the band. Compute the percentage from the per-750 figure against the band,
+never from the raw price against the band. When the two are equal, which is
+every 750ml bottle, render exactly what is rendered today.
+
+Target for the row above: `EUR 89 (EUR 39/750ml) vs EUR 80 band, -52%`.
+
+Tests: one row per format, 750ml unchanged, 1500ml and 620ml showing both
+numbers, and one asserting the percentage is derived from the per-750 figure.
+`dashboard.py` needs the same treatment only if it renders prices; check
+before editing, and remember `wine.html` is generated.
+
+Risk: none to classification. This step alone removes the appearance of
+wrongness from most rows.
+
+### Step 2. Give the band path a HIGH. Behaviour change, cannot lose a DEAL.
+
+`evaluate.py` around line 286, and `prices.yaml` under each class.
+
+Keep `DEAL` exactly as it is, `price750 < band`, so no deal that fires today
+can stop firing. Add an upper bound and classify above it as HIGH, between
+as FAIR. Add an optional `high_over_750_eur` per class so a human can state
+it; when it is absent, derive it from the band.
+
+**Decision needed, and I recommend the second.**
+
+(a) Derive from the existing ratio constants: implied reference is
+`band / deal_threshold`, so HIGH above `band / 0.85 * 1.25`, which is
+`band * 1.47`. Consistent with the market path but the arithmetic is not
+obvious to a reader.
+
+(b) A plain multiple, `high_over_750_eur` defaulting to `band * 1.5`. On the
+domaine band that makes HIGH start at EUR 120, which correctly flags the
+EUR 165 Chateau-Chalon and the EUR 199 Grandes Teppes. Easier to explain in
+`prices.yaml`, which is a file a human edits.
+
+Tests: the EUR 2000 Ganevat must be HIGH; the EUR 79 and EUR 40 cases must
+stay DEAL; a case just under the HIGH bound must stay FAIR. Add a test that
+asserts no input that is DEAL before the change becomes non-DEAL after it,
+driven from the fixture hit set.
+
+### Step 3. Reconcile the two DEAL thresholds. Decision needed.
+
+Once Step 2 exists, the band path has a three-way split and the remaining
+inconsistency is the DEAL edge: strictly under the band, versus
+`ratio <= 0.85` on the market path.
+
+I recommend leaving the band path at "under the band" and documenting it,
+because `deal_under_750_eur` means what it says and a human set that number
+deliberately. If instead you want one rule everywhere, apply
+`deal_threshold` to the band as well, which makes the domaine DEAL line
+EUR 68 rather than EUR 80. That is a real tightening and would have
+suppressed several rows in the 23 August run, so it must not be done
+silently. Whichever is chosen, state it in `CLAUDE.md` next to the existing
+`lines:` paragraph.
+
+### Step 4. A band for the styles that sit above the range. Design decision.
+
+Vin jaune, Chateau-Chalon, macvin and vin de paille are dearer by nature and
+are made by both the domaine and the negoce ranges, which is exactly why
+`CLAUDE.md` forbids putting them in the curated cuvee lists: as cuvees they
+would outrank the label and mis-file bottles.
+
+Proposal: a separate `styles:` map in the Ganevat `lines:` block that adjusts
+only the band, never the line. Precedence stays cuvee, then label, then
+default for choosing the line; the style then selects which band that line
+uses. A `vin jaune` style band of, say, EUR 180 makes a EUR 142 per-750
+clavelin a genuine DEAL and a EUR 250 one a HIGH, which is the information
+you actually want about those wines.
+
+Do not start this before Steps 1 and 2 are merged. It needs its own tests
+proving a style word cannot move a bottle between domaine and negoce.
+
+### Step 5. Documentation, in the same commits.
+
+`CLAUDE.md` currently says the band path yields a "per-line threshold" and
+does not say that it bypasses `market.py` or that it had no HIGH. Update the
+`lines:` paragraph as part of Step 2, not afterwards.
+
+Also correct one factual error found while reading: the architecture section
+says "every priced listing is recorded to `observations.json`". Only priced
+listings that matched a watched producer are recorded, because `main()`
+builds observations from `all_hits`. The behaviour is right for the purpose;
+the sentence is wrong.
+
+## Not pricing, but outstanding
+
+- **demainlesvins returned `unreachable`, 0 products, in run 160 today.** It
+  read 1191 products and 7 hits on 23 August. One shop had errors that run.
+  Worth a look before it is assumed to be a blip.
+- **The puurwijnshop removal and the apply-config permission fix are on
+  `claude/new-repo-setup-sanitize-7gerls`, unmerged.** The live run still
+  reads puurwijnshop's 709 listings.
+- **mesbourgognes is added but `verified: false`,** so it is skipped until a
+  Probe Shops run detects its platform and replaces the placeholder fixture.

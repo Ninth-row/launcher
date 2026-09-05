@@ -441,12 +441,6 @@ SHOPS = [
         "verified": True,
     },
     {
-        "name": "puurwijnshop",
-        "platform": "shopify",
-        "url": "https://www.puurwijn.shop",
-        "verified": True,
-    },
-    {
         "name": "lavinoterie",
         "platform": "shopify",
         "url": "https://lavinoterie.fr",
@@ -556,6 +550,15 @@ SHOPS = [
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
         "verified": True,
+    },
+    {
+        "name": "mesbourgognes",
+        "platform": "html",
+        "url": "https://mesbourgognesbeaune.com",
+        "item_selector": "div.product",
+        "title_selector": "h2.product-title",
+        "price_selector": "span.price",
+        "verified": False,
     },
 ]
 

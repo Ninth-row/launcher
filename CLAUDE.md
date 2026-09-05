@@ -779,8 +779,20 @@ HTTP header or printed.
   tail goes unprobed without saying so.
 - The repo is public, so issue forms are untrusted input. `apply_issue.py`
   must keep rejecting quote/backslash injection, non-https URLs and unsafe
-  shop names, and `apply-config.yml` must keep its `author_association ==
-  'OWNER'` gate. Never put a token in `wine.html` -- it is world-readable.
+  shop names, and `apply-config.yml` must keep gating on the author's *real*
+  repository permission, checked as the job's first step against
+  `getCollaboratorPermissionLevel` and admitting `admin`/`maintain` only.
+  It must never go back to `author_association`, which is a profile
+  *visibility* rather than a permission: this repo is owned by an
+  organisation, and an org member whose membership is private is reported
+  `CONTRIBUTOR` or `NONE`, so the old `OWNER`-or-`MEMBER` test locked out an
+  admin. Every run of that workflow concluded `skipped` from the move
+  onwards -- ten runs, five correctly filled forms, including the
+  mesbourgognes shop -- and a skipped job posts no comment and shows no red
+  tick, so none of it was visible from the issue or the dashboard. A refusal
+  now says so on the issue; plain `write` stays excluded, because push
+  access to help is not authority to drive an unreviewed commit to main.
+  Never put a token in `wine.html` -- it is world-readable.
   The page's own credential is read from `localStorage` at runtime and is
   never written into the generated file; `tests/test_dashboard.py` asserts
   that, and that the script only ever sends it to `api.github.com`.
