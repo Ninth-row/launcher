@@ -91,7 +91,7 @@ jobs:
           GMAIL_SENDER: ${{ secrets.GMAIL_SENDER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
-          MAX_REQUESTS_PER_RUN: ${{ inputs.max_requests_per_run || '400' }}
+          MAX_REQUESTS_PER_RUN: ${{ inputs.max_requests_per_run || '450' }}
           FRESH: ${{ (inputs.fresh && '1') || '' }}
           # A dry run prints the digest and deliberately persists nothing,
           # so previewing a run cannot put real finds into cooldown.

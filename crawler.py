@@ -59,7 +59,27 @@ CONNECT_TIMEOUT = 5
 # neither the cache nor the breaker can stop a loop: every hop is a new URL.
 REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 MAX_REDIRECTS = 5
-DEFAULT_MAX_REQUESTS_PER_RUN = 400
+# Sized to a complete pass over every catalogue, with headroom, and capped by
+# the wall clock: MAX_RUN_SECONDS / 5.5s per request is 490, and
+# tests/test_budget.py fails if this passes that.
+#
+# It was 400, sized when a complete pass measured 311 requests, and on
+# 2026-09-05 it bound for the first time: whynat truncated after page 1 and
+# petitescaves was never reached at all -- a shop that finds 9 hits, skipped
+# without anyone asking for it. Three things had eaten the headroom since 400
+# was chosen, and only one of them is new traffic:
+#   - robots.txt is now counted (about 19 per run). Those requests were always
+#     being made; the budget simply could not see them.
+#   - each redirect hop is now counted, for the same reason.
+#   - mesbourgognes was added, and costs 67 pages for 329 products.
+# So the honest cost of a complete pass today is about 410, not 311, and most
+# of that gap is accounting that got more truthful rather than a crawl that
+# got greedier.
+#
+# 450 leaves roughly one shop's worth of slack. The ceiling is 490, so this
+# buys time rather than solving it: the durable fix is fewer requests per
+# catalogue, not a bigger number here.
+DEFAULT_MAX_REQUESTS_PER_RUN = 450
 DEFAULT_CACHE_DIR = Path(__file__).parent / ".cache"
 
 
