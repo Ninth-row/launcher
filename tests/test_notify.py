@@ -1121,3 +1121,78 @@ def test_a_silenced_line_stays_out_of_the_html_as_well():
         notify.send_email = real
     assert "Shown" in sent["html"]
     assert "Silenced" not in sent["html"]
+
+
+# --- The row must show the number the verdict was reached on ---------------
+#
+# Two pricing paths reach one table. The market path scales its reference by
+# the format multiplier, so a magnum's raw price and its expected price are
+# comparable. The band path converts the listing to a per-750 equivalent and
+# scores that against a per-750 band -- and the row printed the raw price
+# against the band anyway, with a percentage worked out between them. The
+# 23 August digest carried
+#
+#   DEAL | Ganevat | Le Pt'iot Roukin 2023 Magnum | 1500ml | EUR 89 | EUR 80
+#
+# which reads as costing more than its reference while being called a deal.
+# The comparison actually made was 38.70 against 80.
+
+def _banded(**kw):
+    hit = dict(classification="DEAL", producer="Ganevat", title="Le Pt'iot Roukin",
+               size_ml=1500, price=89.0, price_750_eur=38.7, expected_price=80.0,
+               reference_basis="domaine band", url="https://x.example/p")
+    hit.update(kw)
+    return hit
+
+
+def test_a_magnum_shows_the_per_750_figure_it_was_judged_by():
+    cell = notify._money(_banded())
+    assert "EUR 89" in cell, "the price you would pay must still be there"
+    assert "EUR 39/750ml" in cell, "the figure actually compared is missing"
+    assert "-52%" in cell, "the percentage must come from the per-750 figure"
+    assert "+11%" not in cell, "percentage still computed from the raw price"
+
+
+def test_a_750ml_bottle_reads_exactly_as_before():
+    """The two numbers are the same for a bottle, so adding a second one would
+    be noise on most rows."""
+    cell = notify._money(_banded(size_ml=750, price=91.0, price_750_eur=91.0))
+    assert "/750ml" not in cell
+    assert cell == "EUR 91 vs EUR 80 band (+14%)"
+
+
+def test_a_clavelin_stops_hiding_how_dear_it_is():
+    cell = notify._money(_banded(size_ml=620, price=118.0, price_750_eur=142.17))
+    assert "EUR 142/750ml" in cell and "+78%" in cell
+
+
+def test_the_market_path_is_untouched():
+    """There is no price_750_eur there: the reference already carries the
+    format multiplier, so the raw price is the right thing to compare."""
+    cell = notify._money(dict(price=200.0, expected_price=184.0))
+    assert cell == "EUR 200 vs EUR 184 ref (+9%)"
+
+
+def test_a_bundle_is_given_no_per_bottle_comparison():
+    """An unknown number of bottles has no per-bottle price, so evaluate
+    leaves price_750_eur None and the row must not invent one."""
+    cell = notify._money(dict(price=450.0, price_750_eur=None, expected_price=None))
+    assert cell == "EUR 450"
+
+
+def test_both_builders_use_the_same_price_cell():
+    """A plain-text row and an HTML row disagreeing about a price is the seam
+    this helper exists to close."""
+    hit = _banded()
+    assert notify._money(hit) in notify.format_row(hit)
+    assert "EUR 39/750ml" in notify._hit_html(hit)
+    assert "(-52%)" in notify._hit_html(hit)
+
+
+def test_the_digest_row_itself_no_longer_misrepresents_the_magnum():
+    """Stated against the rendered row rather than the helper, so it fails
+    against the previous code for the right reason: the old row printed
+    "EUR 89 | EUR 80" and that is what reached the inbox."""
+    row = notify.format_row(_banded())
+    assert "EUR 39/750ml" in row
+    assert "| EUR 89 | EUR 80 |" not in row, "the old incomparable pair is back"

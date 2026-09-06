@@ -134,7 +134,7 @@ Ordered so that the zero-risk presentation fix lands first and nothing can
 lose a DEAL. Invariant: a listing that alerts today must still alert after
 every step.
 
-### Step 1. Show the number that was compared. No behaviour change.
+### Step 1. Show the number that was compared. DONE.
 
 `notify.py`, both `format_row` and the HTML row builder.
 
@@ -153,6 +153,20 @@ before editing, and remember `wine.html` is generated.
 
 Risk: none to classification. This step alone removes the appearance of
 wrongness from most rows.
+
+Shipped. `compared_price` and `_money` in `notify.py` are shared by the plain
+text and HTML builders, so the two cannot drift. Rendered against real shapes:
+
+    magnum, band path      EUR 89 (EUR 39/750ml) vs EUR 80 band (-52%)
+    750ml, band path       EUR 91 vs EUR 80 band (+14%)
+    clavelin, band path    EUR 118 (EUR 142/750ml) vs EUR 80 band (+78%)
+    magnum, market path    EUR 200 vs EUR 184 ref (+9%)
+    coffret                EUR 450
+
+The reference is now named for what it is, a band or a ref, because those are
+different claims. Seven tests, all failing against the previous code, one of
+them stated against the rendered row rather than the helper so it indicts the
+old output directly.
 
 ### Step 2. Give the band path a HIGH. Behaviour change, cannot lose a DEAL.
 
@@ -226,9 +240,11 @@ the sentence is wrong.
 
 ## Not pricing, but outstanding
 
-- **demainlesvins returned `unreachable`, 0 products, in run 160 today.** It
-  read 1191 products and 7 hits on 23 August. One shop had errors that run.
-  Worth a look before it is assumed to be a blip.
+- **demainlesvins is removed.** A probe on 6 September found HTTP 403 on every
+  request, three times, then the circuit breaker. Not a timeout, not an
+  adapter break, not a challenge served as a 200: a flat refusal, which is the
+  same answer naturavin gives. Two of its captures stayed for
+  `tests/test_pricewall.py`, which pins the general price-wall reader.
 - **The puurwijnshop removal and the apply-config permission fix are on
   `claude/new-repo-setup-sanitize-7gerls`, unmerged.** The live run still
   reads puurwijnshop's 709 listings.

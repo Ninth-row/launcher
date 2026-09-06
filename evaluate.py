@@ -194,11 +194,66 @@ def classify_line(title, producer_entry):
     return lines.get("default"), "default for this producer"
 
 
-def band_for(line_name, producer_entry):
-    """The configured band for a line: (deal_under_750, alertable)."""
+# How far above its band a bottle has to be before the row says so. The band
+# path had no HIGH branch at all: everything not under the band was FAIR, so a
+# Ganevat at EUR 2000 against the EUR 80 domaine band classified FAIR at a
+# ratio of 25, where the identical ratio on the market path classifies HIGH.
+# Ganevat is most of what this scraper finds, so for the producer watched
+# hardest an overpriced bottle was indistinguishable from a correct one.
+#
+# 1.5 was chosen against 12 real banded hits: it flags Grandes Teppes at 199,
+# Chateau-Chalon at 165 and a vin jaune at 142 per 750ml, and leaves Grands
+# Teppes VV at 105 and Enfant Terrible at 83 alone. A class may state its own
+# `high_over_750_eur` when the default multiple is wrong for that range.
+DEFAULT_HIGH_MULTIPLE = 1.5
+
+
+def styles_for(producer_entry):
+    return ((producer_entry or {}).get("lines") or {}).get("styles") or {}
+
+
+def style_for(title, producer_entry):
+    """Which style band this bottle uses, or (None, None).
+
+    A style is not a line and must never become one. Vin jaune, Chateau-Chalon
+    and macvin are made by both the domaine and the negoce ranges, which is
+    exactly why CLAUDE.md forbids them in the curated cuvee lists: as cuvees
+    they would outrank the label and file a negoce bottle under the domaine.
+    So this decides only *which band the chosen line is judged against*, and
+    is read after classify_line has already settled which line the bottle is
+    in. It cannot move a bottle between domaine and negoce.
+
+    It exists because a style that is dearer by nature starts above a band
+    derived from the range as a whole: a 620ml clavelin at EUR 118 scores as
+    EUR 142 per 750ml against an EUR 80 band, so vin jaune could only ever
+    read FAIR, which is the one word that carries no information.
+    """
+    norm = normalize(title)
+    for name, entry in (styles_for(producer_entry) or {}).items():
+        for phrase in (entry or {}).get("match") or []:
+            if normalize(phrase) in norm:
+                return name, f"style {name!r}"
+    return None, None
+
+
+def band_for(line_name, producer_entry, title=""):
+    """(deal_under_750, high_over_750, alertable, how the band was chosen).
+
+    The style band, when one matches, replaces the line's own numbers. The
+    line itself is unchanged, so a negoce vin jaune is still negoce.
+    """
     classes = ((producer_entry or {}).get("lines") or {}).get("classes") or {}
     entry = classes.get(line_name) or {}
-    return entry.get("deal_under_750_eur"), entry.get("alert", True)
+    alertable = entry.get("alert", True)
+
+    style_name, style_basis = style_for(title, producer_entry)
+    source = (styles_for(producer_entry).get(style_name) or {}) if style_name else entry
+
+    band = source.get("deal_under_750_eur", entry.get("deal_under_750_eur"))
+    high = source.get("high_over_750_eur")
+    if high is None and band is not None:
+        high = band * DEFAULT_HIGH_MULTIPLE
+    return band, high, alertable, style_basis
 
 
 def evaluate_hit(hit, pricebook, market_store=None, aliases=None):
@@ -259,7 +314,10 @@ def evaluate_hit(hit, pricebook, market_store=None, aliases=None):
     if line_name:
         result["line"] = line_name
         result["line_basis"] = line_basis
-        band, alertable = band_for(line_name, producer_entry)
+        band, high, alertable, style_basis = band_for(
+            line_name, producer_entry, hit.get("title", ""))
+        if style_basis:
+            result["line_basis"] = f"{line_basis}, {style_basis}"
         price = hit.get("price")
         # Per 750ml, so a magnum is not a bargain for being big and a clavelin
         # is not one for being small. A coffret has no per-bottle price at all,
@@ -280,12 +338,23 @@ def evaluate_hit(hit, pricebook, market_store=None, aliases=None):
             )
             return result
         if band is not None and price750 is not None:
+            # DEAL stays exactly "under the band": deal_under_750_eur means
+            # what it says and a human set that number deliberately, so this
+            # keeps a different threshold from the market path's 0.85 on
+            # purpose. HIGH is the half that was missing.
+            if price750 < band:
+                verdict = "DEAL"
+            elif high is not None and price750 > high:
+                verdict = "HIGH"
+            else:
+                verdict = "FAIR"
+            basis_line = result.get("line_basis", line_basis)
             result.update(
                 tier=None, tier_confidence="n/a", reference_price=band,
                 expected_price=band, ratio=round(price750 / band, 3),
-                classification="DEAL" if price750 < band else "FAIR",
+                classification=verdict,
                 reference_basis=(f"{line_name} band: deal under EUR {band:g} "
-                                 f"per 750ml ({line_basis})"),
+                                 f"per 750ml ({basis_line})"),
                 reference_shops=[], reference_verified=True,
                 caveat=size_confidence == "low", alertable=True,
                 price_750_eur=price750,

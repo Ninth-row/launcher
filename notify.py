@@ -263,10 +263,58 @@ def reason_phrase(hit):
     return ""
 
 
+def compared_price(hit):
+    """(what you pay, the figure actually scored, the reference, its noun).
+
+    Two pricing paths reach this table and they do not put the same thing in
+    `price`. The market path scales its reference by the format multiplier, so
+    a magnum's expected price is a magnum price and the raw listing price is
+    the right thing to compare it with. The band path does the opposite: it
+    converts the listing to a per-750 equivalent and scores that against a
+    per-750 band -- and the row printed the raw price against the band anyway,
+    then worked out a percentage between two numbers that are not comparable.
+
+    The 23 August digest printed
+
+        DEAL | Ganevat | Le Pt'iot Roukin 2023 Magnum | 1500ml | EUR 89 | EUR 80
+
+    which reads as costing more than its reference while being called a deal.
+    The comparison actually made was 38.70 against 80. evaluate.py has
+    recorded price_750_eur for exactly this purpose since the band was
+    written, and its comment says so; nothing had ever read it.
+
+    price_750_eur is set only on the band path, so its presence is what
+    distinguishes the two, and a bundle leaves it None because an unknown
+    number of bottles has no per-bottle price.
+    """
+    price = hit.get("price")
+    per750 = hit.get("price_750_eur")
+    ref = hit.get("expected_price")
+    if per750 is not None:
+        return price, per750, ref, "band"
+    return price, price, ref, "ref"
+
+
+def _money(hit):
+    """The price cell: what you pay, and the figure it was judged by when
+    those differ. They differ for every format that is not a 750ml bottle."""
+    price, compared, ref, noun = compared_price(hit)
+    if price is None:
+        text = "EUR ?"
+    elif compared is not None and abs(compared - price) >= 0.5:
+        text = f"EUR {price:.0f} (EUR {compared:.0f}/750ml)"
+    else:
+        text = f"EUR {price:.0f}"
+    if ref:
+        text += f" vs EUR {ref:.0f} {noun}"
+        if compared is not None:
+            text += f" ({compared / ref - 1:+.0%})"
+    return text
+
+
 def format_row(hit):
     status = hit.get("classification", "NOREF") + ("*" if hit.get("caveat") else "")
-    price = f"EUR {hit['price']:.0f}" if hit.get("price") is not None else "EUR ?"
-    ref = f"EUR {hit['expected_price']:.0f}" if hit.get("expected_price") is not None else "EUR ?"
+    money = _money(hit)
     size = hit.get("size_label") or f"{hit.get('size_ml', 750)}ml"
     cuvee = hit.get("cuvee") or hit.get("title", "")
     producer = hit.get("producer", "")
@@ -281,7 +329,7 @@ def format_row(hit):
     basis = hit.get("reference_basis") or "no reference"
     why = reason_phrase(hit)
     why = f"{why} | " if why else ""
-    return (f"{status:<5} | {producer} | {cuvee} | {size} | {price} | {ref} | "
+    return (f"{status:<5} | {producer} | {cuvee} | {size} | {money} | "
             f"{why}{basis} | {hit.get('url', '')}")
 
 
@@ -448,14 +496,7 @@ def _hit_html(hit):
     head = (f'<a href="{url}" style="{_H["name"]}">{title}</a>'
             if url else f'<span style="{_H["name"]}">{title}</span>')
 
-    price = hit.get("price")
-    ref = hit.get("expected_price")
-    money = f"EUR {price:.0f}" if price is not None else "price unknown"
-    if price is not None and ref:
-        pct = price / ref - 1
-        money += f" vs EUR {ref:.0f} ref ({pct:+.0%})"
-    elif ref:
-        money += f" vs EUR {ref:.0f} ref"
+    money = _money(hit) if hit.get("price") is not None else "price unknown"
     size = _esc(hit.get("size_label") or f"{hit.get('size_ml', 750)}ml")
     shop = _esc(hit.get("shop", ""))
     # Why this row is here, first: a restock and a first sighting are

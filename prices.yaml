@@ -38,6 +38,40 @@ producers:
     - anne
     - negoce
     negoce_default: negoce_unclassified
+    # A style is not a line. Vin jaune, Chateau-Chalon and macvin are made by
+    # both the domaine and the negoce ranges, which is why they must stay out
+    # of the curated cuvee lists: as cuvees they would outrank the label and
+    # file a negoce bottle under the domaine. These change only *which band*
+    # the chosen line is judged against, never which line the bottle is in.
+    #
+    # They exist because a style dearer by nature starts above a band derived
+    # from the range as a whole. A 620ml clavelin at EUR 118 scores as EUR 142
+    # per 750ml against the EUR 80 domaine band, so vin jaune could only ever
+    # read FAIR -- the one word that carries no information.
+    #
+    # These numbers are first estimates from our own observed listings (a vin
+    # jaune at EUR 142 per 750ml, a Chateau-Chalon at EUR 165, Vieux Macvin at
+    # EUR 58 and EUR 60), and this file is the one place a human's knowledge of
+    # the range belongs. Tune them; the digest names every cuvee priced by a
+    # default band, so what needs tuning says so.
+    #
+    # Vin de paille is deliberately absent. It is usually bottled at 375ml and
+    # the shops rarely say so, and parse_size defaults an unstated size to
+    # 750ml, so a band here would be compared against what is probably a half
+    # bottle. Better no verdict than a confident wrong one.
+    styles:
+      vin_jaune:
+        match:
+        - vin jaune
+        - chateau chalon
+        - chateau-chalon
+        deal_under_750_eur: 150
+        high_over_750_eur: 260
+      macvin:
+        match:
+        - macvin
+        deal_under_750_eur: 55
+        high_over_750_eur: 90
     classes:
       domaine:
         deal_under_750_eur: 80
