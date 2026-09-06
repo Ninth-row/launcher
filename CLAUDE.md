@@ -437,6 +437,26 @@ HTTP header or printed.
   by nature -- is not one for being small. It is a deliberate exception to
   "references are observed": a human who knows the range set these, and the
   observed pool cannot separate what a label does not distinguish.
+  A band gives three verdicts, not two. DEAL is strictly under
+  `deal_under_750_eur`, and stays there: that number is a human's deliberate
+  threshold, so the band path keeps a different DEAL rule from the market
+  path's `deal_threshold` of 0.85, on purpose and documented rather than by
+  accident. HIGH is above `high_over_750_eur`, defaulting to 1.5x the band.
+  Without it the path had no HIGH branch at all and a Ganevat at EUR 2000
+  against the EUR 80 domaine band classified FAIR at a ratio of 25, where the
+  same ratio on the market path is HIGH -- so for the producer watched hardest
+  an overpriced bottle read exactly like a correct one.
+  A `styles:` map picks *which band a line is judged against*, and never which
+  line the bottle is in. Vin jaune, Chateau-Chalon and macvin are made by both
+  ranges, which is why they must stay out of the curated cuvee lists; as
+  cuvees they would outrank the label and file a negoce bottle under the
+  domaine. A style is read after the line is settled, so it cannot. It exists
+  because a style dearer by nature starts above a band derived from the whole
+  range: a 620ml clavelin at EUR 118 is EUR 142 per 750ml against an EUR 80
+  band, so vin jaune could only ever read FAIR. Vin de paille is deliberately
+  not a style -- it is usually 375ml and shops rarely say so, and an unstated
+  size defaults to 750ml, so the band would be compared against what is
+  probably a half bottle.
   A line may be configured `alert: false`. Such a hit is classified `NOALERT`
   and stays out of every email body -- digest, recap and on-demand alike,
   because a recap of "everything currently matched" would otherwise put it

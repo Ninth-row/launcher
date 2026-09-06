@@ -10,6 +10,8 @@ Two separate failures had to be fixed for the bands to mean anything, and both
 are pinned here: the pool that could not tell the lines apart, and the absence
 of any per-line threshold.
 """
+import pytest
+
 import market
 import notify
 import evaluate
@@ -86,13 +88,28 @@ def test_a_magnum_is_judged_per_bottle_equivalent():
     assert result["classification"] == "DEAL"
 
 
-def test_a_clavelin_is_not_a_bargain_for_being_small():
+def test_a_clavelin_is_judged_on_its_per_750_equivalent():
     """A clavelin is 620ml and almost always vin jaune, which is dearer by
-    nature. Comparing its face price to a 750ml band would flag EUR 90 as a
-    deal; per 750ml it is EUR 108 and it is not."""
+    nature. The rule is that it is scored on what it works out at per 750ml,
+    never on the price on the label: EUR 90 in a 62cl bottle is EUR 108.
+
+    This asserted `classification == "FAIR"` until vin jaune got its own band.
+    That pinned the domaine band of EUR 80 rather than the rule -- and against
+    a band derived from the whole range a clavelin could only ever read FAIR,
+    which is exactly why the style band exists. The format rule is unchanged,
+    so it is now asserted directly instead of through a verdict that depended
+    on which band happened to be configured.
+    """
     dear = scored("Ganevat Vin Jaune Clavelin 62cl", 90)
     assert dear["price_750_eur"] > 100
-    assert dear["classification"] == "FAIR"
+
+    # The verdict is reached on the per-750 figure. Stated as the arithmetic
+    # rather than as a class name, so tuning a band cannot make it pass or
+    # fail for the wrong reason.
+    band = dear["reference_price"]
+    assert dear["ratio"] == pytest.approx(dear["price_750_eur"] / band, abs=0.001)
+    assert dear["ratio"] > 90 / band, "scored on the face price, not per 750ml"
+
     # And a genuinely cheap clavelin still gets through.
     assert scored("Ganevat Vin Jaune Clavelin 62cl", 55)["classification"] == "DEAL"
 

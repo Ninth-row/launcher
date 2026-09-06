@@ -303,3 +303,69 @@ def test_size_label_present_for_plain_bottles(pricebook):
     result = evaluate.evaluate_hit(hit, pricebook)
     assert result["size_label"] == "1500ml"
     assert result["bundle"] is False
+
+
+# --- The band path can say HIGH, and a style picks the band ----------------
+#
+# The band path had no HIGH branch: everything not under the band was FAIR, so
+# a Ganevat at EUR 2000 against the EUR 80 domaine band classified FAIR at a
+# ratio of 25, where the identical ratio on the market path classifies HIGH.
+# Ganevat is most of what this scraper finds.
+
+def _real_pricebook():
+    """The committed prices.yaml, not the fixture named `pricebook` in this
+    file, which shadows the module."""
+    import pricebook as _pb
+    return _pb.load_pricebook()
+
+
+def _ganevat(title, price, book):
+    hit = {"producer": "Ganevat", "title": title, "price": price,
+           "url": "http://x.example/p", "shop": "s"}
+    return evaluate.evaluate_hits([hit], book, {"records": []}, {})[0]
+
+
+def test_a_banded_bottle_can_now_be_high():
+    book = _real_pricebook()
+    assert _ganevat("Chalasses Vieilles Vignes 2023", 2000, book)["classification"] == "HIGH"
+    assert _ganevat("Chalasses Vieilles Vignes 2023", 199, book)["classification"] == "HIGH"
+
+
+def test_every_deal_that_fired_before_still_fires():
+    """The half that must not move. DEAL stays strictly under the band, so no
+    listing that alerted yesterday can stop alerting today."""
+    book = _real_pricebook()
+    for price in (10, 40, 79):
+        assert _ganevat("Chalasses Vieilles Vignes 2023", price, book)["classification"] == "DEAL"
+
+
+def test_the_middle_is_still_fair():
+    book = _real_pricebook()
+    for price in (81, 105, 120):
+        assert _ganevat("Chalasses Vieilles Vignes 2023", price, book)["classification"] == "FAIR"
+
+
+def test_a_clavelin_of_vin_jaune_can_finally_be_a_deal():
+    """The case the styles exist for. 620ml at EUR 118 is EUR 142 per 750ml,
+    which against the EUR 80 domaine band could only ever read FAIR."""
+    book = _real_pricebook()
+    got = _ganevat("Vin jaune, 2012, Jaune 62cl", 118, book)
+    assert got["classification"] == "DEAL"
+    assert "style 'vin_jaune'" in got["reference_basis"]
+
+
+def test_a_style_never_moves_a_bottle_between_lines():
+    """The whole guard. Style words are made by both ranges, which is why they
+    are banned from the curated cuvee lists -- as cuvees they would outrank
+    the label. A negoce vin jaune must stay negoce."""
+    book = _real_pricebook()
+    got = _ganevat("Anne & Jean-Francois Ganevat Vin Jaune 2016 62cl", 140, book)
+    assert got["line"] == "negoce_unclassified"
+    assert got["classification"] == "NOALERT"
+
+
+def test_a_bottle_of_no_style_keeps_its_own_band():
+    book = _real_pricebook()
+    got = _ganevat("Chalasses Vieilles Vignes 2023", 91, book)
+    assert "EUR 80" in got["reference_basis"]
+    assert "style" not in got["reference_basis"]
