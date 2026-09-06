@@ -451,16 +451,6 @@ SHOPS = [
     # hand-written selectors are earned. The price is public one click away,
     # on the product page, which `_price_from_detail_pages` opens only for
     # producers we watch.
-    {
-        "name": "demainlesvins",
-        "platform": "html",
-        "url": "https://www.demainlesvins.com",
-        "catalog_path": "11-la-selection",
-        "item_selector": "article.product-miniature",
-        "title_selector": "h2.product-title",
-        "price_selector": "span.price",
-        "verified": True,
-    },
     # Nuits-Saint-Georges, 4000+ references, Burgundy-led -- the first shop
     # on this list where Roumier is a plausible find rather than a hope.
     # Its landing page and its category pages both parse to nothing --

@@ -240,9 +240,11 @@ the sentence is wrong.
 
 ## Not pricing, but outstanding
 
-- **demainlesvins returned `unreachable`, 0 products, in run 160 today.** It
-  read 1191 products and 7 hits on 23 August. One shop had errors that run.
-  Worth a look before it is assumed to be a blip.
+- **demainlesvins is removed.** A probe on 6 September found HTTP 403 on every
+  request, three times, then the circuit breaker. Not a timeout, not an
+  adapter break, not a challenge served as a 200: a flat refusal, which is the
+  same answer naturavin gives. Two of its captures stayed for
+  `tests/test_pricewall.py`, which pins the general price-wall reader.
 - **The puurwijnshop removal and the apply-config permission fix are on
   `claude/new-repo-setup-sanitize-7gerls`, unmerged.** The live run still
   reads puurwijnshop's 709 listings.

@@ -255,9 +255,17 @@ Five remain unverified, and every one has a tested reason:
     way a bot challenge is — by not going there. Its own domain is a shopfront
     with nothing to read, which is why the entry points at Hiboutik at all.
 
-**demainlesvins** is the third shop written off from the wrong page, and the
-one that showed a price can be *present and unreadable*. It is PrestaShop 1.7
-running private sales, and its cards genuinely refuse a guest a price: 33 of
+**demainlesvins** was removed on request after it began answering every
+request with HTTP 403 -- three attempts, three refusals, then the circuit
+breaker, confirmed by a probe on 2026-09-06. That is a shop saying no, and it
+is answered the same way a bot challenge is: by not going there. Nothing here
+tries to get past it. It is written up in the past tense because the code it
+taught is still live and general, and `_price_from_detail_pages` fires for any
+HTML shop whose listings carry no price, not for this one.
+
+It was the third shop written off from the wrong page, and the
+one that showed a price can be *present and unreadable*. It was PrestaShop 1.7
+running private sales, and its cards genuinely refused a guest a price: 33 of
 34 carry "Vous devez être connecté pour voir le prix" where the figure would
 be. The old verdict — "1.34MB, 2 prices, 0 product links, 32× connexion" —
 came from its **home page**; its categories hold 300 listings, and the price
@@ -276,6 +284,13 @@ page only for a listing naming a producer we watch: 4 of 432 captured titles
 matched, so the whole catalogue costs about ten requests, capped at 25. Its
 sold-out marker is `product-oos` as a CSS class and nothing in the card's
 text, which is the biarritz stock column in a new costume.
+
+Two of its captures are kept deliberately, against the rule below that a
+shop's captures leave with it: `tests/test_pricewall.py` reads them, and what
+it pins is the general price-wall reader rather than this shop. Real markup of
+a card that hides its price and a product page that states it twice is not
+reproducible once deleted, and the next PrestaShop private-sales shop will
+need exactly that test. The rest went with the entry.
 
 **wineshopbiarritz** is the second document shop, and the one that showed the
 adapter was reading a document without reading its *columns*. Its site is Wix
@@ -301,12 +316,17 @@ coverage row and a line in the digest. Do not try to get past a challenge: it
 is a shop saying no.
 
 Shops leave the list too. vinopura, volatilewines, purovino, biowijnclub,
-vinifine, lespeauxdevins, vinibee and vinovivo were removed on request.
+vinifine, lespeauxdevins, vinibee, vinovivo, puurwijnshop, petitescaves,
+vinnaturelbe and demainlesvins were removed on request.
 Between them the first five were 726 products and no hits, and purovino had
-only just been made readable; the last three were 1320 products and two hits
-(vinibee's Richard Leroy) at 13 pages a run. Removing a shop is
-config, not archaeology -- the entry, its fixture and its captures go
-together, and git remembers the rest.
+only just been made readable; the next three were 1320 products and two hits
+(vinibee's Richard Leroy) at 13 pages a run; puurwijnshop was 709 listings and
+never a hit, and demainlesvins had started refusing us with 403. Removing a
+shop is config, not archaeology -- the entry, its fixture and its captures go
+together, and git remembers the rest. The one exception is a capture a test
+still reads for a *general* behaviour rather than for that shop: two
+demainlesvins pages stayed for `tests/test_pricewall.py`, because real markup
+of a price wall cannot be re-fetched from a shop that has closed the door.
 
 Secrets (`GMAIL_SENDER`, `GMAIL_APP_PASSWORD`, `NOTIFY_EMAIL`) are the
 only external configuration; everything else is in this repo. Those three
