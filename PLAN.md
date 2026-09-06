@@ -134,7 +134,7 @@ Ordered so that the zero-risk presentation fix lands first and nothing can
 lose a DEAL. Invariant: a listing that alerts today must still alert after
 every step.
 
-### Step 1. Show the number that was compared. No behaviour change.
+### Step 1. Show the number that was compared. DONE.
 
 `notify.py`, both `format_row` and the HTML row builder.
 
@@ -153,6 +153,20 @@ before editing, and remember `wine.html` is generated.
 
 Risk: none to classification. This step alone removes the appearance of
 wrongness from most rows.
+
+Shipped. `compared_price` and `_money` in `notify.py` are shared by the plain
+text and HTML builders, so the two cannot drift. Rendered against real shapes:
+
+    magnum, band path      EUR 89 (EUR 39/750ml) vs EUR 80 band (-52%)
+    750ml, band path       EUR 91 vs EUR 80 band (+14%)
+    clavelin, band path    EUR 118 (EUR 142/750ml) vs EUR 80 band (+78%)
+    magnum, market path    EUR 200 vs EUR 184 ref (+9%)
+    coffret                EUR 450
+
+The reference is now named for what it is, a band or a ref, because those are
+different claims. Seven tests, all failing against the previous code, one of
+them stated against the rendered row rather than the helper so it indicts the
+old output directly.
 
 ### Step 2. Give the band path a HIGH. Behaviour change, cannot lose a DEAL.
 
