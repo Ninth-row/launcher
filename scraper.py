@@ -187,10 +187,47 @@ SUMMARY_ROW_CAP = 300
 # reported under the wrong producer, and a Bourgogne at EUR 20 scored against
 # a Jura reference is a false DEAL, not merely a wrong label.
 NAMESAKES = {
+    # The Overnoy namesakes earn their place the moment a bare "overnoy" is
+    # allowed anywhere (see SHOP_ALIASES). Without a *longer* alias competing
+    # for the bottle, the drop rule below has nothing to drop with, and
+    # Pupillin's Overnoy-Crinquand would be reported as Pierre Overnoy.
+    # "Domaine Overnoy" is deliberately absent: shops write Pierre Overnoy's
+    # estate that way too, so a namesake there would silence the real bottle,
+    # and a false negative is the one failure this project cannot recover.
+    "not-ours: Overnoy-Crinquand": ["overnoy-crinquand", "crinquand"],
+    "not-ours: Jean-Louis Overnoy": [
+        "jean-louis overnoy", "overnoy jean-louis", "guillaume overnoy",
+    ],
     "not-ours: Pierre Labet": ["labet pierre", "pierre labet"],
     "not-ours: Francois Labet": ["labet francois", "francois labet"],
     "not-ours: Laurent Roumier": ["roumier laurent", "laurent roumier"],
     "not-ours: Herve Roumier": ["roumier herve", "herve roumier"],
+}
+
+# Aliases trusted at one named shop and nowhere else.
+#
+# A bare surname is banned from PRODUCERS because it is shared: "overnoy"
+# also matches Overnoy-Crinquand and Jean-Louis et Guillaume Overnoy, and the
+# bare name once reported all of their bottles as Pupillin's. But a shop can
+# make the namesake implausible on its own. winenot lists
+# "PACK OVERNOY SAVAGNIN 2018" at EUR 580, in stock, and that title is the
+# whole of what the shop says -- no "Pierre", no "Houillon" -- so the estate
+# we watch was invisible there while its bottle sat on the shelf.
+#
+# This is a deliberate trade, not a loosening: the surname is admitted only
+# where a human has judged the range, the namesakes above still take a bottle
+# away when they match, and the digest row names the alias that fired, which
+# is how a misattribution is caught. It is scoped by shop *name*, so it
+# cannot leak into probe.py or discover.py, which pass no shop at all --
+# neither of them should be deciding a shop is readable on the strength of a
+# surname.
+#
+# Adding to this is a watchlist decision. Weigh the shop's own range first:
+# at a Burgundy shop "overnoy" would be a guess, not an inference.
+SHOP_ALIASES = {
+    "winenot": {
+        "Overnoy/Houillon": ["overnoy"],
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -570,7 +607,7 @@ normalize = textnorm.strip_accents
 match_key = textnorm.match_key
 
 
-def match_producers(text):
+def match_producers(text, shop=None):
     """Return the canonical producer names whose aliases appear in text.
 
     When one match's alias sits inside another's, only the longer one
@@ -579,12 +616,17 @@ def match_producers(text):
     this every Bruyere-Houillon bottle would be reported twice, once under
     the wrong estate.
     """
-    return list(matched_aliases(text))
+    return list(matched_aliases(text, shop))
 
 
-def matched_aliases(text):
+def matched_aliases(text, shop=None):
     """{producer: the alias that matched} -- the same rule, but keeping the
     alias instead of discarding it.
+
+    `shop` admits that shop's entries from SHOP_ALIASES and nothing else.
+    Passing none is the safe default and is what probe.py and discover.py
+    do: a surname trusted because of a shop's range says nothing about
+    whether a *candidate* shop can be read.
 
     A digest row that names the alias carries its own diagnosis: three
     estates were reported under the wrong producer this month, each caught
@@ -598,8 +640,13 @@ def matched_aliases(text):
     share a surname, so widening the separators does not widen who matches.
     """
     norm = match_key(text)
+    pool = {**PRODUCERS, **NAMESAKES}
+    for canonical, extra in (SHOP_ALIASES.get(shop) or {}).items():
+        # A new list every call: PRODUCERS must not grow an alias because
+        # one shop was read.
+        pool[canonical] = list(pool.get(canonical, ())) + list(extra)
     matched = {}
-    for canonical, aliases in {**PRODUCERS, **NAMESAKES}.items():
+    for canonical, aliases in pool.items():
         hits = [match_key(a) for a in aliases if match_key(a) in norm]
         if hits:
             matched[canonical] = max(hits, key=len)
@@ -1025,7 +1072,8 @@ def _price_from_detail_pages(shop, items, crawler_client):
     when it names a producer we watch and has no price yet.
     """
     wanted = [i for i in items
-              if i.get("price") is None and i.get("url") and match_producers(i["text"])]
+              if i.get("price") is None and i.get("url")
+              and match_producers(i["text"], shop.get("name"))]
     if not wanted:
         return 0
 
@@ -1466,7 +1514,7 @@ def check_shop(shop, crawler_client):
     skipped = 0
     for item in items:
         near_tokens |= near_miss_candidates(item["text"], by_first)
-        matches = matched_aliases(item["text"])
+        matches = matched_aliases(item["text"], shop.get("name"))
         # A bottle nobody can buy is not a find. But it is still evidence
         # that this shop stocks the producer at all, which is the difference
         # between "your alias is broken" and "the wine is gone" -- so it is

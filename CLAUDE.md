@@ -602,6 +602,21 @@ HTTP header or printed.
   `PRODUCERS`: `apply_issue.py` finds the end of that dict by the "Shops to
   check" banner, so a dict in between silently swallows every producer the
   issue form adds, as a name that is matched and then dropped.
+- A bare surname may be trusted at one named shop, through `SHOP_ALIASES`,
+  and that is the only way it may ever be trusted. winenot lists "PACK
+  OVERNOY SAVAGNIN 2018" at EUR 580, in stock, and that title is the whole of
+  what the shop says -- no "Pierre", no "Houillon" -- so the estate we watch
+  was invisible there while its bottle sat on the shelf. The scope is the
+  shop *name*, so it cannot leak: `probe.py` and `discover.py` pass no shop
+  at all, and neither should decide a candidate shop is readable on the
+  strength of a surname. Three things make the trade survivable and all three
+  must hold -- the namesakes are in `NAMESAKES` so a longer alias still takes
+  the bottle away (adding a scoped surname without them is how
+  Overnoy-Crinquand gets reported as Pierre Overnoy), the alias that fired is
+  named in the digest row, and a human judged that shop's range. "Domaine
+  Overnoy" is deliberately *not* a namesake: shops write Pierre Overnoy's own
+  estate that way, so blocking it would silence the real bottle. Adding to
+  this table is a watchlist decision, not a fix for a shop that parses badly.
 - Producer aliases must name an estate, not a surname. `match_producers`
   prefers the longest matching alias, but that only separates producers we
   track -- it cannot help against an untracked namesake. Jura and Savoie
