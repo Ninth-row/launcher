@@ -601,6 +601,41 @@ def test_out_of_stock_stated_as_a_content_attribute_is_read():
     assert [i["in_stock"] for i in find_at(html, "https://shop.test")] == [False, True, True]
 
 
+def test_in_store_only_is_not_a_bottle_you_can_buy():
+    """schema.org's availability vocabulary is wider than the three obvious
+    values, and InStoreOnly is the one this reader was missing. A shop's
+    counter is not reachable from here, so such a listing read as buyable,
+    got alerted once, and was written to seen.json -- which is what silences
+    the restock that watching it is for."""
+    card = ('<div class="card"><a href="/vin-{i}">Ganevat Cuvee {i}</a>'
+            '<span>29,00 &euro;</span>{avail}</div>')
+    html = ("<html><body><div class='grid'>"
+            + card.format(i=0, avail='<link itemprop="availability" '
+                                     'href="https://schema.org/InStoreOnly"/>')
+            + "".join(card.format(i=i, avail="") for i in (1, 2))
+            + "</div></body></html>")
+    assert [i["in_stock"] for i in find_at(html, "https://shop.test")] == [False, True, True]
+
+
+def test_a_bottle_you_can_still_order_is_not_sold_out():
+    """The other half, and the reason this set stays small. A pre-order is
+    often the only way to buy a grower allocated in dozens of bottles, and
+    PrestaShop's own allow_oosp sells stock the shop does not hold. Filing
+    either as sold out suppresses the best find there is, and a suppressed
+    find is the failure this project cannot recover from."""
+    card = ('<div class="card"><a href="/vin-{i}">Ganevat Cuvee {i}</a>'
+            '<span>29,00 &euro;</span>{avail}</div>')
+    for value in ("PreOrder", "PreSale", "BackOrder", "OnlineOnly",
+                  "LimitedAvailability"):
+        html = ("<html><body><div class='grid'>"
+                + card.format(i=0, avail='<meta itemprop="availability" '
+                                         f'content="{value}"/>')
+                + "".join(card.format(i=i, avail="") for i in (1, 2))
+                + "</div></body></html>")
+        got = [i["in_stock"] for i in find_at(html, "https://shop.test")]
+        assert got == [True, True, True], f"{value} was read as sold out"
+
+
 # --- the price you would actually pay ----------------------------------------
 
 def test_a_discounted_card_records_the_new_price_not_the_old_one():

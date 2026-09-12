@@ -369,7 +369,21 @@ HTTP header or printed.
 - `schema.org/InStock` is a claim, never evidence. Availability is read as a
   *value* (`href` or `content`, 1.6 and 1.7 spell it differently) and only
   ever believed when it says out of stock -- the same asymmetry
-  `markup_says_sold_out` already documents. vinnouveau's sold-out cards were
+  `markup_says_sold_out` already documents. The vocabulary is wider than the
+  obvious three, and `SOLD_OUT_AVAILABILITY` admits a value on one question
+  only: can the reader put the bottle in a basket? `InStoreOnly` cannot be,
+  so it belongs there -- a counter in Burgundy is not reachable from here,
+  and a listing read as buyable is alerted once and then written to
+  `seen.json`, which silences the restock. `PreOrder`, `PreSale` and
+  `BackOrder` can be, so they must stay out: for a grower allocated in dozens
+  of bottles a pre-order is often the only chance to buy, PrestaShop's own
+  `allow_oosp` sells stock a shop does not hold, and this set can only ever
+  *add* a sold-out verdict -- a wrong addition is a bottle that never reaches
+  the inbox. Upstream is no help here: PrestaShop 1.6's `product.tpl` emitted
+  `InStock` only when `quantity > 0` with no `else` branch at all (issue
+  #13832, fixed only in 1.6.1.x), and 1.7 breaks availability again when
+  stock management is disabled (#23199), which is why the buy button
+  outranks the claim. vinnouveau's sold-out cards were
   held up by the French words beside them alone, and a restyle would have
   taken that shop silently to zero.
 - The price is the one you would pay. PrestaShop renders a discounted card

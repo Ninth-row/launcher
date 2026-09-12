@@ -594,10 +594,28 @@ OUT_OF_STOCK_CLASSES = {"outofstock", "out-of-stock", "out_of_stock",
                         "product-oos"}
 OUT_OF_STOCK_SCHEMA = "schema.org/outofstock"
 OUT_OF_STOCK_TOKENS = {re.sub(r"[^a-z0-9]", "", c) for c in OUT_OF_STOCK_CLASSES}
-# schema.org availability values that mean "not now". InStock is deliberately
-# absent: it is a *claim*, and winenot's theme makes it on every card it
-# serves, including bottles whose own buy button is disabled.
-SOLD_OUT_AVAILABILITY = {"outofstock", "soldout", "discontinued"}
+# schema.org availability values that mean "you cannot buy this". InStock is
+# deliberately absent: it is a *claim*, and winenot's theme makes it on every
+# card it serves, including bottles whose own buy button is disabled.
+#
+# The vocabulary is wider than the three obvious values, and the rest of it
+# splits on one question: can the reader put the bottle in a basket? Only
+# where the answer is no does a value belong here, because this set can only
+# ever *add* a sold-out verdict, and a wrong addition is a bottle that never
+# reaches the inbox -- the one failure this project cannot recover from.
+#   InStoreOnly  -- no. A Burgundy shop's counter is not reachable from here,
+#                   and a listing that reads as buyable gets alerted once and
+#                   then written to seen.json, which silences the restock.
+#   PreOrder, PreSale -- yes. For a grower allocated in dozens of bottles a
+#                   pre-order is often the only chance to buy at all, so
+#                   filing it as sold out would suppress the best find there
+#                   is.
+#   BackOrder    -- usually yes: PrestaShop's own allow_oosp sells bottles it
+#                   does not hold. Left out for that reason, and it is the
+#                   one judgement call here worth revisiting if a shop turns
+#                   out to use it for "gone".
+#   OnlineOnly, LimitedAvailability -- buyable, and not our business.
+SOLD_OUT_AVAILABILITY = {"outofstock", "soldout", "discontinued", "instoreonly"}
 
 
 def markup_says_sold_out(block):
