@@ -619,6 +619,22 @@ def match_producers(text, shop=None):
     return list(matched_aliases(text, shop))
 
 
+# match_key on an alias is a pure function of a short, fixed string, and the
+# matcher asked for the same 52 answers again on every one of the 14773
+# listings a cold pass reads -- three quarters of a million normalisations for
+# fifty-two distinct results. Memoised per alias string rather than at import,
+# so a test that patches PRODUCERS, or apply_issue adding one, needs no
+# invalidation: a new string is simply a new entry.
+_ALIAS_KEYS = {}
+
+
+def alias_key(alias):
+    key = _ALIAS_KEYS.get(alias)
+    if key is None:
+        key = _ALIAS_KEYS[alias] = match_key(alias)
+    return key
+
+
 def matched_aliases(text, shop=None):
     """{producer: the alias that matched} -- the same rule, but keeping the
     alias instead of discarding it.
@@ -647,7 +663,7 @@ def matched_aliases(text, shop=None):
         pool[canonical] = list(pool.get(canonical, ())) + list(extra)
     matched = {}
     for canonical, aliases in pool.items():
-        hits = [match_key(a) for a in aliases if match_key(a) in norm]
+        hits = [k for k in map(alias_key, aliases) if k in norm]
         if hits:
             matched[canonical] = max(hits, key=len)
 

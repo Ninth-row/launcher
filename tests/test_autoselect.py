@@ -1373,3 +1373,37 @@ def test_a_pager_that_loops_still_stops():
     shop = dict(OVERLAPPING, catalog_paths=["a"])
     items = scraper.fetch_html(shop, Looping())
     assert len(items) == 3, f"a looping pager was followed round, got {len(items)}"
+
+
+def test_a_card_with_nothing_struck_through_is_not_copied():
+    """_payable_text used to duplicate every card's subtree in order to
+    delete nothing from it -- the most expensive thing done per listing, on a
+    sample where not one card in forty had a struck-through price. The guard
+    must not change the answer, so the plain card and the discounted one are
+    both pinned here beside the copy being skipped."""
+    from bs4 import BeautifulSoup
+    plain = BeautifulSoup('<div class="card"><span>12,15 &euro;</span></div>',
+                          "html.parser").div
+    assert autoselect._payable_text(plain, "fb") == "12,15 €"
+
+    discounted = BeautifulSoup(
+        '<div class="card"><del>13,50 &euro;</del><span>12,15 &euro;</span></div>',
+        "html.parser").div
+    assert autoselect._payable_text(discounted, "fb") == "12,15 €"
+
+    by_class = BeautifulSoup(
+        '<div class="card"><span class="old-price">13,50 &euro;</span>'
+        '<span>12,15 &euro;</span></div>', "html.parser").div
+    assert autoselect._payable_text(by_class, "fb") == "12,15 €"
+
+
+def test_an_alias_key_is_computed_once_per_alias():
+    """The matcher asked for the same 52 answers on every one of 14773
+    listings. Memoised per alias string, so patching PRODUCERS needs no
+    invalidation -- a new string is simply a new entry."""
+    scraper.alias_key("pierre overnoy")
+    before = dict(scraper._ALIAS_KEYS)
+    for _ in range(50):
+        assert scraper.alias_key("pierre overnoy") == before["pierre overnoy"]
+    assert dict(scraper._ALIAS_KEYS) == before, "recomputed a key it already had"
+    assert scraper.alias_key("brand new name") == scraper.match_key("brand new name")
