@@ -883,3 +883,63 @@ def test_the_empty_grower_pages_are_named_not_just_counted():
     line = out.getvalue()
     assert "listing nothing" in line
     assert "Ganevat" in line, "the empty grower pages must be named"
+
+
+# --- a surname trusted at one shop and nowhere else ---------------------------
+#
+# winenot lists "PACK OVERNOY SAVAGNIN 2018" at EUR 580, in stock, and that
+# title is the whole of what the shop says -- no "Pierre", no "Houillon". A
+# bare "overnoy" is banned from PRODUCERS because Overnoy-Crinquand and
+# Jean-Louis et Guillaume Overnoy share it, so the estate we watch was
+# invisible at that shop while its bottle sat on the shelf. SHOP_ALIASES
+# admits the surname where a human has judged the range, and nowhere else.
+
+PACK = "PACK OVERNOY SAVAGNIN 2018"
+
+
+def test_the_scoped_surname_matches_at_its_own_shop():
+    assert scraper.matched_aliases(PACK, "winenot") == {"Overnoy/Houillon": "overnoy"}
+
+
+def test_the_scoped_surname_matches_nowhere_else():
+    """The whole point of scoping. A Burgundy shop's "Overnoy" is a guess."""
+    for shop in ("pangee", "mareehaute", "cavescarriere", "nosuchshop"):
+        assert scraper.matched_aliases(PACK, shop) == {}, shop
+
+
+def test_no_shop_means_no_scoped_alias():
+    """probe.py and discover.py pass no shop, and must not decide a shop is
+    readable on the strength of a surname."""
+    assert scraper.matched_aliases(PACK) == {}
+    assert scraper.match_producers(PACK) == []
+
+
+def test_the_namesake_still_takes_the_bottle_away_at_that_shop():
+    """The guard that makes the trade survivable: admitting the surname is
+    only safe while a longer alias can still out-match it."""
+    for title in ("Overnoy-Crinquand Savagnin 2020",
+                  "Domaine Overnoy-Crinquand Arbois Pupillin",
+                  "Jean-Louis Overnoy Ploussard"):
+        assert scraper.matched_aliases(title, "winenot") == {}, title
+
+
+def test_the_real_estate_still_matches_everywhere():
+    """Scoping adds a shop's surname; it must take nothing away."""
+    for shop in (None, "winenot", "pangee"):
+        assert scraper.matched_aliases(
+            "Pierre Overnoy Arbois Pupillin 2018", shop) == {
+                "Overnoy/Houillon": "pierre overnoy"}
+
+
+def test_the_row_names_the_alias_that_fired():
+    """A scoped match is weaker evidence than a full name, so the digest has
+    to say which alias won -- that is how a misattribution is caught."""
+    assert scraper.matched_aliases(PACK, "winenot")["Overnoy/Houillon"] == "overnoy"
+
+
+def test_a_scoped_alias_never_mutates_the_producer_table():
+    before = dict(scraper.PRODUCERS["Overnoy/Houillon"] and
+                  {"Overnoy/Houillon": list(scraper.PRODUCERS["Overnoy/Houillon"])})
+    scraper.matched_aliases(PACK, "winenot")
+    assert list(scraper.PRODUCERS["Overnoy/Houillon"]) == before["Overnoy/Houillon"]
+    assert "overnoy" not in scraper.PRODUCERS["Overnoy/Houillon"]

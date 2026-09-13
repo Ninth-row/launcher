@@ -369,7 +369,21 @@ HTTP header or printed.
 - `schema.org/InStock` is a claim, never evidence. Availability is read as a
   *value* (`href` or `content`, 1.6 and 1.7 spell it differently) and only
   ever believed when it says out of stock -- the same asymmetry
-  `markup_says_sold_out` already documents. vinnouveau's sold-out cards were
+  `markup_says_sold_out` already documents. The vocabulary is wider than the
+  obvious three, and `SOLD_OUT_AVAILABILITY` admits a value on one question
+  only: can the reader put the bottle in a basket? `InStoreOnly` cannot be,
+  so it belongs there -- a counter in Burgundy is not reachable from here,
+  and a listing read as buyable is alerted once and then written to
+  `seen.json`, which silences the restock. `PreOrder`, `PreSale` and
+  `BackOrder` can be, so they must stay out: for a grower allocated in dozens
+  of bottles a pre-order is often the only chance to buy, PrestaShop's own
+  `allow_oosp` sells stock a shop does not hold, and this set can only ever
+  *add* a sold-out verdict -- a wrong addition is a bottle that never reaches
+  the inbox. Upstream is no help here: PrestaShop 1.6's `product.tpl` emitted
+  `InStock` only when `quantity > 0` with no `else` branch at all (issue
+  #13832, fixed only in 1.6.1.x), and 1.7 breaks availability again when
+  stock management is disabled (#23199), which is why the buy button
+  outranks the claim. vinnouveau's sold-out cards were
   held up by the French words beside them alone, and a restyle would have
   taken that shop silently to zero.
 - The price is the one you would pay. PrestaShop renders a discounted card
@@ -602,6 +616,21 @@ HTTP header or printed.
   `PRODUCERS`: `apply_issue.py` finds the end of that dict by the "Shops to
   check" banner, so a dict in between silently swallows every producer the
   issue form adds, as a name that is matched and then dropped.
+- A bare surname may be trusted at one named shop, through `SHOP_ALIASES`,
+  and that is the only way it may ever be trusted. winenot lists "PACK
+  OVERNOY SAVAGNIN 2018" at EUR 580, in stock, and that title is the whole of
+  what the shop says -- no "Pierre", no "Houillon" -- so the estate we watch
+  was invisible there while its bottle sat on the shelf. The scope is the
+  shop *name*, so it cannot leak: `probe.py` and `discover.py` pass no shop
+  at all, and neither should decide a candidate shop is readable on the
+  strength of a surname. Three things make the trade survivable and all three
+  must hold -- the namesakes are in `NAMESAKES` so a longer alias still takes
+  the bottle away (adding a scoped surname without them is how
+  Overnoy-Crinquand gets reported as Pierre Overnoy), the alias that fired is
+  named in the digest row, and a human judged that shop's range. "Domaine
+  Overnoy" is deliberately *not* a namesake: shops write Pierre Overnoy's own
+  estate that way, so blocking it would silence the real bottle. Adding to
+  this table is a watchlist decision, not a fix for a shop that parses badly.
 - Producer aliases must name an estate, not a surname. `match_producers`
   prefers the longest matching alias, but that only separates producers we
   track -- it cannot help against an untracked namesake. Jura and Savoie
