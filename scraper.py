@@ -585,6 +585,15 @@ SHOPS = [
         "price_selector": "span.price",
         "verified": True,
     },
+    {
+        "name": "feralart",
+        "platform": "html",
+        "url": "https://www.feralartetvin.com",
+        "item_selector": "div.product",
+        "title_selector": "h2.product-title",
+        "price_selector": "span.price",
+        "verified": False,
+    },
 ]
 
 
