@@ -138,6 +138,38 @@ def _linked_elements(root):
             yield element, target
 
 
+
+def _distinct_products(blocks):
+    """How many different wines a group of priced blocks actually holds.
+
+    A carousel that renders the same three bottles twice is three bottles,
+    not six, and counting the blocks let such a strip outscore a real grid.
+    """
+    targets = set()
+    for block in blocks:
+        anchor = _product_link(block)
+        target = _link_target(anchor) if anchor is not None else None
+        if target:
+            targets.add(target)
+    return len(targets)
+
+
+def _product_links_under(element):
+    """How many distinct product pages this subtree points at.
+
+    Used only to break a tie between two equally priced groups, so it asks
+    the loose question on purpose: any link out of the element, deduplicated
+    by target. A grid of cards points at one page per card; a cross-sell
+    strip of the same size points at no more, and usually fewer once its
+    priceless neighbours are counted in.
+    """
+    targets = set()
+    for node in element.find_all(True):
+        target = _link_target(node)
+        if target:
+            targets.add(target)
+    return len(targets)
+
 def _product_link(element):
     # The element may *be* the link rather than contain one: a data-url
     # card carries the destination on itself, and looking only at
@@ -354,13 +386,30 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
                 ancestor = ancestor.parent if ancestor is not None else None
             if ancestor is None:
                 continue
-            by_parent.setdefault(id(ancestor), []).append(block)
+            by_parent.setdefault(id(ancestor), (ancestor, []))[1].append(block)
         if not by_parent:
             break
-        candidate = max(by_parent.values(), key=len)
-        if len(candidate) > len(best):
-            best = candidate
-        if len(best) >= min_blocks:
+        # A group is worth what it holds in *distinct* wines, and ties are
+        # broken by how many products the parent describes, priced or not.
+        # Counting priced blocks alone read winenot's /nouveaux-produits
+        # wrong in both halves: its real grid is
+        # `#js-product-list > .products.row` -- four cards, three of them the
+        # packs that no catalogue of that shop lists -- and beside it sits a
+        # cross-sell carousel that renders the same three Cortons twice. Six
+        # priced blocks beat three, so the carousel won every run, the three
+        # packs were never read, and the walk reported success; PACK LABET LA
+        # REINE and PACK OVERNOY SAVAGNIN were in stock throughout. Six blocks
+        # for three wines is three wines, which makes that 3 against 3, and
+        # then the parent decides: the carousel points at 3 pages, the grid at
+        # 4, because its priceless fourth card is still a card. Asking the
+        # markup "which of you is the grid" beats asking which came first in
+        # the document, which is all `max` over equal counts was doing.
+        candidate = max(by_parent.values(),
+                        key=lambda g: (_distinct_products(g[1]),
+                                       _product_links_under(g[0])))
+        if _distinct_products(candidate[1]) > _distinct_products(best):
+            best = candidate[1]
+        if _distinct_products(best) >= min_blocks:
             break
 
     if len(best) < min_blocks:

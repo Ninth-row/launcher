@@ -1447,3 +1447,56 @@ def test_a_shop_whose_every_catalogue_fails_is_still_a_failed_shop():
                                           "https://shop.test/b"})
     with pytest.raises(scraper.crawler.UpstreamError):
         scraper.fetch_html(shop, client)
+
+
+def test_a_new_arrivals_walk_says_what_it_did_even_when_it_did_nothing(capsys):
+    """The first live run of this read winenot's strip, added nothing, and
+    printed not one line about it -- so "the path is wrong", "the page is
+    unreadable" and "the catalogue really does hold everything" were
+    indistinguishable from the log."""
+    shop = dict(SHOP, new_arrivals="nouveaux-produits")
+    client = PagedCrawler({"https://shop.test": page([1, 2, 3]),
+                           "https://shop.test/nouveaux-produits": page([1, 2])})
+
+    scraper.fetch_html(shop, client)
+
+    out = capsys.readouterr().out
+    assert "new arrivals" in out
+    assert "0 not in the catalogue" in out
+
+
+def test_a_new_arrivals_walk_that_fails_says_so(capsys):
+    shop = dict(SHOP, new_arrivals="nouveaux-produits")
+    client = FailingPathCrawler({"https://shop.test": page([1, 2, 3])},
+                                dead={"https://shop.test/nouveaux-produits"})
+
+    items = scraper.fetch_html(shop, client)
+
+    assert len(items) == 3, "a failed strip must not lose the catalogue"
+    out = capsys.readouterr().out
+    assert "could not be read" in out
+
+
+def test_a_carousel_showing_three_wines_twice_does_not_beat_the_grid():
+    """Real markup from winenot.fr/nouveaux-produits.
+
+    Its grid holds four cards, three of them packs that no catalogue of that
+    shop lists -- PACK LABET LA REINE among them, in stock at EUR 290 -- and
+    the fourth carries no price. Beside it sits a cross-sell carousel that
+    renders the same three Cortons twice. Six priced blocks beat three, so
+    the carousel won every run and the packs were never read, while the walk
+    reported success.
+    """
+    html = (pathlib.Path(__file__).parent / "fixtures"
+            / "winenot-new-arrivals-excerpt.html").read_text()
+
+    items = autoselect.find_products(
+        html, "https://winenot.fr/nouveaux-produits",
+        scraper.PRICE_PATTERN, scraper.parse_price)
+
+    urls = [i["url"] for i in items]
+    assert any("4979-pack-labet-la-reine" in u for u in urls), \
+        f"the grid lost to the carousel again: {urls}"
+    assert not any("corton" in u for u in urls), \
+        "the carousel was read instead of the grid"
+    assert items[0]["price"] == 290.0

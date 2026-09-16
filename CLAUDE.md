@@ -831,6 +831,26 @@ HTTP header or printed.
   exactly the same route -- and is named in the digest as "Failed once, read
   on retry", because a flaky shop otherwise prints a clean row until the day
   the retry fails too and it looks newly broken.
+- A group is worth what it holds in *distinct* wines, and only then in
+  priced blocks. winenot's `/nouveaux-produits` carries its real grid --
+  `#js-product-list > .products.row`, four cards, three of them the packs no
+  catalogue of that shop lists -- beside a cross-sell carousel rendering the
+  same three Cortons *twice*. Six priced blocks beat three, so the carousel
+  won every run: the strip was walked, parsed cleanly, added nothing, and the
+  log said so in no line at all, while PACK LABET LA REINE sat there in stock
+  at EUR 290. Six blocks for three wines is three wines, which makes it 3
+  against 3, and the tie goes to the parent describing more products, priced
+  or not -- the carousel points at 3 pages, the grid at 4, because its
+  priceless fourth card is still a card. Asking the markup which of them is
+  the grid beats asking which came first in the document, which is all `max`
+  over equal counts was doing.
+  `tests/fixtures/winenot-new-arrivals-excerpt.html` keeps both groups as
+  real markup.
+- The new-arrivals walk states its result on every outcome, including the
+  boring one. Its first live run added nothing and printed nothing, so "the
+  path is wrong", "the page is unreadable" and "the catalogue really does
+  hold everything" were indistinguishable from the log. The count is only
+  news when it is not zero; that it was *measured* is news every time.
 - One dead category must not black out a shop. `_walk_pages` raises when
   *page one* fails, which is right for a shop with one catalogue and wrong for
   a shop with six: a renamed category would take the whole range dark. A

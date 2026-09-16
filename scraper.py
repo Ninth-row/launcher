@@ -1496,21 +1496,34 @@ def fetch_html(shop, crawler_client):
     new_path = shop.get("new_arrivals")
     if new_path:
         new_url = urljoin(shop["url"].rstrip("/") + "/", new_path)
+        new_items, new_how, failed = [], None, None
         try:
             _, _, new_items, _, new_how, _ = _walk_pages(
                 shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
                 max_age=crawler.FRESH_PAGE_TTL_SECONDS)
         except (crawler.BudgetExceeded, crawler.UpstreamError,
-                crawler.Challenged, EmptyResponseError):
-            new_items = []
+                crawler.Challenged, EmptyResponseError) as e:
+            failed = f"{type(e).__name__}: {e}"
         known = {i["url"] for i in items}
         extra = [i for i in new_items if i.get("url") and i["url"] not in known]
+        off_catalogue = len(extra)
         if extra:
-            off_catalogue = len(extra)
             items = list(items) + extra
             how = how or new_how
-            print(f"[{shop['name']}] new arrivals added {off_catalogue} "
-                  f"listing(s) the catalogue did not have")
+        # Said out loud on every outcome, including the boring ones. The first
+        # live run of this read winenot's strip, added nothing, and printed
+        # not one line about it -- so "the path is wrong", "the page is
+        # unreadable" and "the catalogue really does hold everything" were
+        # indistinguishable from the log, which is the exact silence this
+        # project exists to remove. The number is only news when it is not
+        # zero; that it was *measured* is news every time.
+        if failed:
+            print(f"[{shop['name']}] new arrivals {new_url} could not be read "
+                  f"({failed}); the catalogue alone was used")
+        else:
+            print(f"[{shop['name']}] new arrivals {new_url}: read "
+                  f"{len(new_items)} listing(s), {off_catalogue} not in the "
+                  f"catalogue")
 
     if items and how == "auto":
         print(f"[{shop['name']}] no configured selector matched; "
