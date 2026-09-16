@@ -161,6 +161,22 @@ WOO_PAGE_SIZE = 100
 # 118 rather than clipped to a round number that reported 480 of its 2827 wines
 # as though 480 were the catalogue. This only stops a runaway pager.
 MAX_PAGES_PER_SHOP = 150
+# A new-arrivals strip is a handful of pages by construction -- it is the
+# newest N products, not a catalogue -- so it gets its own small cap rather
+# than the net above. Walking it further would be walking the catalogue again
+# by a different route, at a page a time.
+NEW_ARRIVALS_PAGES = 3
+# A shop that answered nothing on the first pass gets exactly one more try,
+# after every other shop has been read. The two failures worth retrying are
+# transient by definition -- a connection that dropped, or a host the circuit
+# breaker gave up on three requests in -- and by the end of a sweep that host
+# has been left alone for twenty quiet minutes, which is the pause a rate
+# limiter is asking for. Nothing else is retried: a bot challenge, a robots
+# refusal, an empty JS storefront and a parse error all say the same thing
+# twice. The clock reserve is what keeps the second pass honest: a retry that
+# starts four minutes before MAX_RUN_SECONDS cannot finish a catalogue, and an
+# unfinished retry is a TRUNCATED row where an accurate failure row was.
+RETRY_CLOCK_RESERVE_SECONDS = 240.0
 # Rows in the Actions step summary. The page has a 1MB ceiling and this is a
 # glance, not the record -- hits.json is still the whole of it.
 SUMMARY_ROW_CAP = 300
@@ -363,6 +379,15 @@ SHOPS = [
         "platform": "html",
         "url": "https://winenot.fr",
         "catalog_path": "s/35/blanc-rouge-rose-vin-effervescent-vin-moelleux-vin-mute",
+        # That catalogue is a union of six values of the shop's own
+        # "Couleur / Type" facet, and a pack of six bottles has no colour, so
+        # every pack winenot sells sits outside the 1215 products it states.
+        # Captured 2026-09-15 in one probe run: 0 occurrences of "pack" in the
+        # catalogue, 15 on /nouveaux-produits. PACK LABET LA REINE (quantity 1,
+        # add-to-cart enabled) and PACK OVERNOY SAVAGNIN 2018 at EUR 580 were
+        # both in stock, both matched their producer, and neither was ever
+        # fetched.
+        "new_arrivals": "nouveaux-produits",
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
@@ -1387,6 +1412,42 @@ def fetch_html(shop, crawler_client):
                 print(f"[{shop['name']}] producer index added {len(extra)} "
                       f"listing(s) the catalogue did not have")
 
+    # The newest listings, read on purpose rather than hoped for.
+    #
+    # A configured catalogue can be a *subset* of a shop's range and say
+    # nothing about it: winenot's is the union of six values of its own
+    # "Couleur / Type" facet, and a pack of six bottles carries no colour, so
+    # every pack it sells is outside the 1215 products that catalogue states.
+    # PACK LABET LA REINE and PACK OVERNOY SAVAGNIN 2018 were both in stock,
+    # both matched their producer, and neither was ever fetched. Reading the
+    # strip costs a page or two and is where an allocated bottle appears
+    # first, which is the whole point of running this hourly.
+    #
+    # Added *beside* the catalogue, never instead of it -- the probe choosing
+    # a strip over a catalogue is a separate documented failure, and a strip
+    # rotates, so anything that ages off it must still be found the usual way.
+    # The count of listings it adds that the catalogue did not have is the
+    # alarm: a healthy shop reads 0, and anything else says the catalogue is
+    # not the whole shop.
+    off_catalogue = 0
+    new_path = shop.get("new_arrivals")
+    if new_path:
+        new_url = urljoin(shop["url"].rstrip("/") + "/", new_path)
+        try:
+            _, _, new_items, _, new_how, _ = _walk_pages(
+                shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set())
+        except (crawler.BudgetExceeded, crawler.UpstreamError,
+                crawler.Challenged, EmptyResponseError):
+            new_items = []
+        known = {i["url"] for i in items}
+        extra = [i for i in new_items if i.get("url") and i["url"] not in known]
+        if extra:
+            off_catalogue = len(extra)
+            items = list(items) + extra
+            how = how or new_how
+            print(f"[{shop['name']}] new arrivals added {off_catalogue} "
+                  f"listing(s) the catalogue did not have")
+
     if items and how == "auto":
         print(f"[{shop['name']}] no configured selector matched; "
               f"read {len(items)} product(s) by auto-detection")
@@ -1398,6 +1459,7 @@ def fetch_html(shop, crawler_client):
     # share bottles and the URL dedupe ends a walk early. Both read as a
     # shortfall that is not there.
     return ParsedItems(items, truncated=truncated, pages_read=pages_read,
+                       off_catalogue=off_catalogue,
                        pages_total=pages_total if len(starts) == 1 else None)
 
 
@@ -1459,9 +1521,14 @@ class ParsedItems(list):
     the coverage table can be compared to its real selection at all.
     """
 
-    def __init__(self, items=(), truncated=False, pages_read=0, pages_total=None):
+    def __init__(self, items=(), truncated=False, pages_read=0, pages_total=None,
+                 off_catalogue=0):
         super().__init__(items)
         self.truncated = truncated
+        # Listings the new-arrivals strip had and the catalogue did not. A
+        # configured catalogue that is a subset of the shop says nothing about
+        # it, so this number is the only way that shows up.
+        self.off_catalogue = off_catalogue
         # How much of the catalogue this was. "480 products" read as the whole
         # of vinnouveau for weeks while the shop's own page said 2827 over 118
         # pages -- the count alone cannot tell a complete read from a slice.
@@ -1492,7 +1559,8 @@ class ShopResult(list):
     """
 
     def __init__(self, hits=(), products_parsed=0, sold_out=(), near_tokens=(),
-                 truncated=False, out_of_stock=0, pages_read=0, pages_total=None):
+                 truncated=False, out_of_stock=0, pages_read=0, pages_total=None,
+                 off_catalogue=0):
         super().__init__(hits)
         self.products_parsed = products_parsed
         self.sold_out = list(sold_out)
@@ -1507,6 +1575,7 @@ class ShopResult(list):
         self.out_of_stock = out_of_stock
         self.pages_read = pages_read
         self.pages_total = pages_total
+        self.off_catalogue = off_catalogue
 
 
 def shop_order(shops, now=None):
@@ -1565,11 +1634,15 @@ def check_shop(shop, crawler_client):
                       truncated=getattr(items, "truncated", False),
                       out_of_stock=skipped,
                       pages_read=getattr(items, "pages_read", 0),
-                      pages_total=getattr(items, "pages_total", None))
+                      pages_total=getattr(items, "pages_total", None),
+                      off_catalogue=getattr(items, "off_catalogue", 0))
 
 
 def main():
     crawler_client = crawler.Crawler()
+    off_catalogue_shops = []
+    retry_later = []
+    recovered = []         # failed first pass, read on the second
     all_hits = []
     coverage = []
     sold_out_shops = {}      # producer -> shops that had it, out of stock
@@ -1584,6 +1657,33 @@ def main():
     order = shop_order(SHOPS)
 
     started = time.monotonic()
+    def absorb(shop, hits):
+        """Everything a successful read contributes to the run.
+
+        Shared by the first pass and the retry pass on purpose: a shop
+        recovered on the second attempt has to reach the digest, the market
+        pool and the sold-out note by exactly the same route, or a retry
+        would quietly produce a thinner run than a first-time success.
+        """
+        all_hits.extend(hits)
+        for row in hits.sold_out:
+            sold_out_shops.setdefault(row["producer"], set()).add(row["shop"])
+        if hits.near_tokens:
+            near_corpus[shop["name"]] = hits.near_tokens
+        # A shop whose new-arrivals strip holds wine its catalogue does not is
+        # a shop we are reading incompletely, and only this number says so. In
+        # the log alone it stayed invisible for weeks while two in-stock packs
+        # went unfetched, so it reaches the digest.
+        if getattr(hits, "off_catalogue", 0):
+            off_catalogue_shops.append(
+                f"{shop['name']}: {hits.off_catalogue} listing(s) on new "
+                f"arrivals that the catalogue does not carry")
+        if hits.products_parsed == 0:
+            # Its fixture parses to more than zero, so the adapter has stopped
+            # reading this shop. Until now this printed the same line as a
+            # shop with nothing we watch in stock.
+            silent_shops.append(shop["name"])
+
     for i, shop in enumerate(order):
         if MAX_RUN_SECONDS > 0 and time.monotonic() - started >= MAX_RUN_SECONDS:
             unreached = [s for s in order[i:] if s.get("verified", True)]
@@ -1611,18 +1711,9 @@ def main():
         try:
             hits = check_shop(shop, crawler_client)
             coverage.append(coverage_row(shop, hits))
-            all_hits.extend(hits)
-            for row in hits.sold_out:
-                sold_out_shops.setdefault(row["producer"], set()).add(row["shop"])
-            if hits.near_tokens:
-                near_corpus[shop["name"]] = hits.near_tokens
-            parsed = hits.products_parsed
-            if parsed == 0:
-                # Its fixture parses to more than zero, so the adapter has
-                # stopped reading this shop. Until now this printed the same
-                # line as a shop with nothing we watch in stock.
-                silent_shops.append(shop["name"])
-            print(f"[{shop['name']}] ok, {len(hits)} hit(s) from {parsed} product(s)")
+            absorb(shop, hits)
+            print(f"[{shop['name']}] ok, {len(hits)} hit(s) from "
+                  f"{hits.products_parsed} product(s)")
         except EmptyResponseError:
             error_count += 1
             coverage.append(coverage_row(shop, status="empty response"))
@@ -1638,6 +1729,7 @@ def main():
             print(f"[{shop['name']}] blocked by a bot challenge, not read: {e}")
         except crawler.CircuitOpen as e:
             error_count += 1
+            retry_later.append((len(coverage), shop))
             coverage.append(coverage_row(shop, status="circuit open"))
             print(f"[{shop['name']}] circuit breaker open for this host, skipped: {e}")
         except crawler.BudgetExceeded:
@@ -1650,12 +1742,45 @@ def main():
             break
         except crawler.UpstreamError as e:
             error_count += 1
+            retry_later.append((len(coverage), shop))
             coverage.append(coverage_row(shop, status="unreachable"))
             print(f"[{shop['name']}] unreachable: {e}")
         except Exception as e:
             error_count += 1
             coverage.append(coverage_row(shop, status="parse error"))
             print(f"[{shop['name']}] parse error: {e}")
+
+    # Second pass. A first-pass failure is not evidence a shop is down: three
+    # of the list answered a hand probe minutes after a run called them
+    # unreachable, and a shop reported unreachable contributes nothing to the
+    # digest, nothing to the price pool, and a "watched but found nowhere"
+    # line it did not earn. Retried only once, only at the end, and only when
+    # the first pass actually finished -- if the run already ran out of budget
+    # or clock, spending what is left on a shop that failed instead of one
+    # never opened is the wrong trade.
+    if retry_later and not unreached:
+        for idx, shop in retry_later:
+            elapsed = time.monotonic() - started
+            if MAX_RUN_SECONDS > 0 and elapsed >= MAX_RUN_SECONDS - RETRY_CLOCK_RESERVE_SECONDS:
+                print(f"[{shop['name']}] not retried: out of time for a second pass")
+                continue
+            if crawler_client.max_requests - crawler_client.request_count <= 0:
+                print(f"[{shop['name']}] not retried: out of request budget")
+                continue
+            crawler_client.reopen(shop["url"])
+            try:
+                hits = check_shop(shop, crawler_client)
+            except Exception as e:
+                print(f"[{shop['name']}] retry failed too: {e}")
+                continue
+            # Replace the failure row in place rather than appending: two rows
+            # for one shop would double-count it in every coverage total.
+            coverage[idx] = coverage_row(shop, hits)
+            absorb(shop, hits)
+            error_count = max(0, error_count - 1)
+            recovered.append(shop["name"])
+            print(f"[{shop['name']}] recovered on retry, {len(hits)} hit(s) from "
+                  f"{hits.products_parsed} product(s)")
 
     # A shop the run never got to needs a row of its own. Without one it
     # simply vanishes from the table -- and the table is the one place that
@@ -1775,6 +1900,12 @@ def main():
         "Reference pool": lost_pool,
         "Cuvees priced by a default band, needing a line": unplaced,
         "Alias near-misses": misses,
+        "Read incompletely -- new arrivals the catalogue misses": off_catalogue_shops,
+        # A shop that only answers on the second attempt is working, and that
+        # is worth saying rather than hiding: it reads as a clean row in the
+        # coverage table, so without this line the flakiness is invisible
+        # until the day the retry fails too and the shop looks newly broken.
+        "Failed once, read on retry": recovered,
     }
     # Before the email, so the run's own page carries the result even when the
     # digest is empty, capped, or never sent at all.

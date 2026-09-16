@@ -792,6 +792,38 @@ HTTP header or printed.
   that merely parsed (a portfolio page, a sub-category), and giving those
   first place spends the budget on a slice of the shop instead of the whole
   of it.
+- A catalogue is not always the whole shop, and being first is the point.
+  winenot's catalogue is a `Couleur / Type` facet union, so a listing carrying
+  no colour is not in it: the same probe run found **0** titles containing
+  "pack" across the crawled catalogue and **15** on `/nouveaux-produits`,
+  including `4963-pack-overnoy-savagnin-2018` at EUR 580 and
+  `4979-pack-labet-la-reine`, both in stock and neither ever reported. An
+  optional `new_arrivals` path on a SHOPS entry is walked after the catalogue
+  with a fresh seen-set, capped at `NEW_ARRIVALS_PAGES` because a new-arrivals
+  strip is the newest N products and not a second catalogue, and deduplicated
+  against the catalogue's URLs. What is left over is `off_catalogue`, and it
+  is a *number the digest states* -- "read incompletely" -- because a shop we
+  read partially otherwise prints a clean coverage row. It is a mitigation,
+  not a cure: the cure is finding the path that states the whole range.
+- A first-pass failure is not evidence a shop is down. A shop reported
+  `unreachable` contributes no digest rows, nothing to the price pool, and a
+  "watched but found nowhere" line its aliases did not earn -- and vinnaturel
+  answered a hand probe with a healthy 66KB catalogue minutes after a run had
+  written it off. `main()` retries `UpstreamError` and `CircuitOpen` **once**,
+  after every other shop is read, calling `Crawler.reopen()` to clear the
+  breaker for that host alone: by then it has had twenty quiet minutes, which
+  is the pause a rate limiter is asking for. Nothing else is retried --
+  `Challenged`, `Disallowed`, an empty JS storefront and a parse error all say
+  the same thing twice, and a challenge is a shop saying no. Two guards are
+  load-bearing: the retry is skipped entirely when the first pass left shops
+  unreached (what budget remains belongs to a shop nobody has read once), and
+  a recovered shop **replaces** its failure row in `coverage` rather than
+  appending, or one shop is counted twice in every total. Recovery goes
+  through the same `absorb()` the first pass uses -- a shop read on the second
+  attempt must reach the digest, the market pool and the sold-out note by
+  exactly the same route -- and is named in the digest as "Failed once, read
+  on retry", because a flaky shop otherwise prints a clean row until the day
+  the retry fails too and it looks newly broken.
 - Catalogues are paged. Any new fetcher must walk pages, not just read the
   first one -- seeing only page one turns a real hit into a silent miss,
   which is the exact failure this project exists to avoid.

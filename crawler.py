@@ -416,6 +416,21 @@ class Crawler:
     def _record_success(self, host):
         self._consecutive_failures[host] = 0
 
+    def reopen(self, url):
+        """Give one host a clean slate, for a deliberate second attempt.
+
+        The breaker is meant to stop a run hammering a host that is down, and
+        it does that by keeping it skipped for the *rest of the run*. That is
+        right while the run is still working through its list, and wrong once
+        the list is finished: a shop that failed at minute two has had twenty
+        quiet minutes by then, which is exactly the gap a rate limiter wants.
+        Only main()'s retry pass calls this, and only once per shop, so the
+        breaker still bounds what a single sweep can do to a host.
+        """
+        host = urlparse(url).netloc
+        self._broken_hosts.discard(host)
+        self._consecutive_failures[host] = 0
+
     # -- the fetch itself -------------------------------------------------
 
     def get(self, url, params=None, _hops=0):
