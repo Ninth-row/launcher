@@ -444,6 +444,22 @@ SHOPS = [
         "name": "vinnaturel",
         "platform": "html",
         "url": "https://www.vinnaturel.fr",
+        # Cave de Trinquetaille, PrestaShop 1.6. Its landing page is not its
+        # catalogue: the run read 12 products from it for weeks and reported
+        # "ok", which is the third time a shop has been judged from the wrong
+        # page. Its own menu offers no "all wines" link at all -- the bottle
+        # range is three colour categories (VINS BLANCS / ROSES / ROUGES
+        # Bouteilles, /31 alone stating "Il y a 108 produits" and paging to
+        # ?p=6), with bag-in-box kept separate under /24 and therefore left
+        # out: a 3L BIB is not a bottle and would enter the price pool as
+        # one. No union exists here, so this is the winenot shape and gets a
+        # list; each category states its own size, so the pages fraction
+        # stays honest.
+        "catalog_paths": [
+            "31-vins-rouges-bouteilles-",
+            "28-vins-blancs-bouteilles",
+            "29-vins-roses-bouteilles-",
+        ],
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
@@ -1258,12 +1274,13 @@ def catalogue_starts(shop, now=None):
     return starts
 
 
-def _walk_pages(shop, crawler_client, start, pages_left, seen_urls):
+def _walk_pages(shop, crawler_client, start, pages_left, seen_urls, max_age=None):
     """Follow one catalogue's own "next page" links.
 
     Returns (pages fetched, truncated, items, first page's html). `seen_urls`
     is shared across catalogues so a bottle listed in two categories is read
-    once.
+    once. `max_age` overrides the crawler's cache TTL for this walk, which is
+    how a new-arrivals strip is read fresh while a catalogue is not.
     """
     items, visited, page_url, how = [], {start}, start, None
     # Product URLs seen by *this* walk. Separate from the shared seen_urls on
@@ -1276,7 +1293,7 @@ def _walk_pages(shop, crawler_client, start, pages_left, seen_urls):
     while page < pages_left:
         page += 1
         try:
-            resp = crawler_client.get(page_url)
+            resp = crawler_client.get(page_url, max_age=max_age)
             fetched += 1
             resp.raise_for_status()
         except crawler.BudgetExceeded:
@@ -1369,9 +1386,29 @@ def fetch_html(shop, crawler_client):
     # size, so each is walked to the end of itself.
     pages_read = 0
 
+    # One dead category must not black out a shop. A configured catalog_paths
+    # list is a set of categories, and a category gets renamed or retired on
+    # its own schedule -- _walk_pages raises when *page one* fails, which is
+    # right for a shop with one catalogue and wrong for a shop with six: the
+    # whole range would go dark because one URL moved. So a failure is only
+    # the shop failing when every start failed. The first one is still the
+    # measured-best catalogue (catalogue_starts pins it), so this degrades in
+    # the right order, and the missing category shows up as a shortfall in
+    # the coverage row's pages fraction rather than as a silent zero.
+    failures = []
     for start in starts:
-        fetched, page_truncated, page_items, page_html, page_how, stated = _walk_pages(
-            shop, crawler_client, start, MAX_PAGES_PER_SHOP, seen_urls)
+        try:
+            (fetched, page_truncated, page_items, page_html, page_how,
+             stated) = _walk_pages(shop, crawler_client, start,
+                                   MAX_PAGES_PER_SHOP, seen_urls)
+        except (crawler.UpstreamError, EmptyResponseError) as e:
+            failures.append(e)
+            if len(failures) == len(starts):
+                raise
+            print(f"[{shop['name']}] catalogue {start} failed ({e}); "
+                  f"reading the rest")
+            truncated = True
+            continue
         pages_read += fetched
         if stated:
             pages_total = (pages_total or 0) + stated
@@ -1447,7 +1484,8 @@ def fetch_html(shop, crawler_client):
         new_url = urljoin(shop["url"].rstrip("/") + "/", new_path)
         try:
             _, _, new_items, _, new_how, _ = _walk_pages(
-                shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set())
+                shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
+                max_age=crawler.FRESH_PAGE_TTL_SECONDS)
         except (crawler.BudgetExceeded, crawler.UpstreamError,
                 crawler.Challenged, EmptyResponseError):
             new_items = []

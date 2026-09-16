@@ -51,7 +51,7 @@ class FakeCrawler:
         self.request_count = 0
         self.max_requests = 1000
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.request_count += 1
         return self._response
 
@@ -211,7 +211,7 @@ def test_unverified_shops_are_skipped_by_main(monkeypatch, capsys, tmp_path):
         request_count = 0
         max_requests = 999
 
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             raise AssertionError(f"test must not hit the network: {url}")
 
     monkeypatch.setattr(crawler_mod, "Crawler", lambda *a, **k: NoNetwork())
@@ -352,7 +352,7 @@ class PagingCrawler:
         self.max_requests = 1000
         self.pages_requested = []
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         page = (params or {}).get("page")
         self.pages_requested.append(page)
         if self._budget_after is not None and len(self.pages_requested) > self._budget_after:
@@ -605,7 +605,7 @@ def one_page(payload):
             super().__init__(None)
             self.n = 0
 
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             self.n += 1
             empty = {"products": []} if isinstance(payload, dict) else []
             return FakeJSONResponse(payload if self.n == 1 else empty)
@@ -811,7 +811,7 @@ def test_a_runaway_pager_still_stops(monkeypatch):
         products instead would stop the walk at page two on URL dedupe, which
         is a different mechanism and not the one under test."""
 
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             self.request_count += 1
             page = int(url.rsplit("=", 1)[-1]) if "page=" in url else 1
             body = region_page(f"x{page}", 4).replace(
@@ -872,7 +872,7 @@ def test_the_empty_grower_pages_are_named_not_just_counted():
     index = (FIXTURES / "leszinzinsduvin-domaines-excerpt.html").read_text()
 
     class Empty:
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             return scraper.crawler.FetchResult(200, "<html><body></body></html>")
 
     shop = shop_by_name("leszinzinsduvin")

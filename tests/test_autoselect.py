@@ -218,7 +218,7 @@ class PagedCrawler:
         self.pages = pages
         self.requested = []
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.requested.append(url)
         return scraper.crawler.FetchResult(200, self.pages.get(url, ""))
 
@@ -399,7 +399,7 @@ def test_the_index_route_uses_the_page_already_fetched():
             self.n = 0
             self.urls = []
 
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             self.n += 1
             self.urls.append(url)
             return scraper.crawler.FetchResult(200, REAL_INDEX if self.n == 1 else grower)
@@ -487,7 +487,7 @@ def test_check_shop_does_not_alert_on_a_bottle_nobody_can_buy():
         def __init__(self):
             self.n = 0
 
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             self.n += 1
             return scraper.crawler.FetchResult(
                 200, REAL_INDEX if self.n == 1 else REAL_GROWER)
@@ -1095,7 +1095,7 @@ class FlakyPagedCrawler(PagedCrawler):
         super().__init__(pages)
         self.status = status
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.requested.append(url)
         if url not in self.pages:
             raise scraper.crawler.UpstreamError(f"HTTP {self.status}",
@@ -1235,7 +1235,7 @@ class TwoPageShop:
     def __init__(self):
         self.urls = []
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.urls.append(url)
         if url.rstrip("/").endswith("leszinzinsduvin.com"):
             return scraper.crawler.FetchResult(200, LANDING)
@@ -1324,7 +1324,7 @@ class TwoCategories:
     def __init__(self):
         self.urls = []
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.urls.append(url)
         pages = {
             # First category: wines 1-3, then 4-6.
@@ -1365,7 +1365,7 @@ def test_a_pager_that_loops_still_stops():
     """The break exists for a pager that serves the same page for ever. That
     must keep working: the fix narrows it to repeats within one walk."""
     class Looping:
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             # Always the same three wines, always offering a "next".
             return scraper.crawler.FetchResult(
                 200, _page([1, 2, 3], "https://shop.test/a?p=99"))
@@ -1407,3 +1407,43 @@ def test_an_alias_key_is_computed_once_per_alias():
         assert scraper.alias_key("pierre overnoy") == before["pierre overnoy"]
     assert dict(scraper._ALIAS_KEYS) == before, "recomputed a key it already had"
     assert scraper.alias_key("brand new name") == scraper.match_key("brand new name")
+
+
+class FailingPathCrawler(PagedCrawler):
+    """Serves the map, and raises for URLs named in `dead` -- a category that
+    has been renamed or retired, which is a thing shops do one path at a
+    time."""
+
+    def __init__(self, pages, dead=()):
+        super().__init__(pages)
+        self.dead = set(dead)
+
+    def get(self, url, params=None, max_age=None):
+        self.requested.append(url)
+        if url in self.dead:
+            raise scraper.crawler.UpstreamError("HTTP 404", status_code=404)
+        return scraper.crawler.FetchResult(200, self.pages.get(url, ""))
+
+
+def test_one_dead_category_does_not_black_out_the_whole_shop():
+    """A catalog_paths list is a set of categories, and _walk_pages raises
+    when page one fails. That is right for a shop with one catalogue and
+    wrong for a shop with six: the whole range would go dark because one URL
+    moved."""
+    shop = dict(SHOP, catalog_paths=["a", "b"])
+    client = FailingPathCrawler(
+        {"https://shop.test/a": page([1, 2, 3])},
+        dead={"https://shop.test/b"})
+
+    items = scraper.fetch_html(shop, client)
+
+    assert len(items) == 3, "a live category was lost with the dead one"
+    assert items.truncated, "the shortfall must reach the coverage row"
+
+
+def test_a_shop_whose_every_catalogue_fails_is_still_a_failed_shop():
+    shop = dict(SHOP, catalog_paths=["a", "b"])
+    client = FailingPathCrawler({}, dead={"https://shop.test/a",
+                                          "https://shop.test/b"})
+    with pytest.raises(scraper.crawler.UpstreamError):
+        scraper.fetch_html(shop, client)

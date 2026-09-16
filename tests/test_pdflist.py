@@ -173,7 +173,7 @@ class PdfCrawler:
         self.page_html = page_html
         self.requested = []
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.requested.append(url)
         if url.endswith(".pdf"):
             return crawler.FetchResult(200, "", content=self.pdf_bytes)

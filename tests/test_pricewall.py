@@ -89,7 +89,7 @@ class OneDetail:
     def __init__(self, body=DETAIL):
         self.body, self.urls = body, []
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.urls.append(url)
         return crawler.FetchResult(200, self.body)
 
@@ -130,7 +130,7 @@ def test_the_number_of_detail_fetches_is_capped():
 
 def test_the_budget_running_out_stops_the_walk_rather_than_failing_the_shop():
     class Broke(OneDetail):
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             raise crawler.BudgetExceeded("spent")
     items = [item("Domaine Ganevat Macvin", "https://x.test/7349")]
     scraper._price_from_detail_pages(SHOP, items, Broke())   # must not raise
@@ -139,7 +139,7 @@ def test_the_budget_running_out_stops_the_walk_rather_than_failing_the_shop():
 
 def test_a_detail_page_that_is_gone_leaves_the_listing_alone():
     class Missing(OneDetail):
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             raise crawler.UpstreamError("HTTP 404", status_code=404)
     items = [item("Domaine Ganevat Macvin", "https://x.test/7349")]
     scraper._price_from_detail_pages(SHOP, items, Missing())

@@ -86,7 +86,7 @@ class FakeCrawler:
     def reopen(self, url):
         self.reopened.append(url)
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.request_count += 1
         self.urls.append(url)
         if self.request_count > self.max_requests:

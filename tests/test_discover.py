@@ -141,7 +141,7 @@ class FakeCrawler:
         self.pages = pages
         self.requested = []
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.requested.append(url)
         if url not in self.pages:
             raise crawler.UpstreamError("HTTP 404", status_code=404)
@@ -252,7 +252,7 @@ class OnePage:
     def __init__(self, body):
         self.body, self.urls = body, []
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.urls.append(url)
         return crawler.FetchResult(200, self.body)
 

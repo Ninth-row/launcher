@@ -814,7 +814,14 @@ HTTP header or printed.
   breaker for that host alone: by then it has had twenty quiet minutes, which
   is the pause a rate limiter is asking for. Nothing else is retried --
   `Challenged`, `Disallowed`, an empty JS storefront and a parse error all say
-  the same thing twice, and a challenge is a shop saying no. Two guards are
+  the same thing twice, and a challenge is a shop saying no. Neither is a
+  status that *answered*: `NO_RETRY_STATUSES` keeps 401/403/404/405/407/410/451
+  out of the second pass, because mesbourgognes answered HTTP 403 to every
+  request of a run and that is the sentence naturavin and demainlesvins said.
+  A refusal also gets its own word in the coverage table (`refused 403`) and
+  its own digest note: reported as "unreachable" it reads as a network fault
+  someone could fix, which is how a shop that has closed its door stays on the
+  list looking like an outage. Two guards are
   load-bearing: the retry is skipped entirely when the first pass left shops
   unreached (what budget remains belongs to a shop nobody has read once), and
   a recovered shop **replaces** its failure row in `coverage` rather than
@@ -824,6 +831,21 @@ HTTP header or printed.
   exactly the same route -- and is named in the digest as "Failed once, read
   on retry", because a flaky shop otherwise prints a clean row until the day
   the retry fails too and it looks newly broken.
+- One dead category must not black out a shop. `_walk_pages` raises when
+  *page one* fails, which is right for a shop with one catalogue and wrong for
+  a shop with six: a renamed category would take the whole range dark. A
+  failing start is now only the shop failing when *every* start failed;
+  otherwise it is logged, the row is marked TRUNCATED, and the rest are read.
+  `catalogue_starts` pins the measured-best catalogue first, so this degrades
+  in the right order.
+- **vinnaturel** is Cave de Trinquetaille, PrestaShop 1.6, and it was the
+  third shop judged from the wrong page -- its landing page is not its
+  catalogue, and reading it gave 12 products and a clean `ok` row for weeks.
+  Its own menu offers no "all wines" link, so the bottle range is three colour
+  categories (`/31-vins-rouges-bouteilles-` alone states "Il y a 108 produits"
+  and pages to `?p=6`, plus `/28` blancs and `/29` roses). Bag-in-box lives
+  separately under `/24` and stays out on purpose: a 3L BIB is not a bottle
+  and would enter the price pool as one.
 - Catalogues are paged. Any new fetcher must walk pages, not just read the
   first one -- seeing only page one turns a real hit into a silent miss,
   which is the exact failure this project exists to avoid.
