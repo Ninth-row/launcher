@@ -420,6 +420,10 @@ SHOPS = [
         "platform": "html",
         "url": "https://vinnouveau.fr",
         "catalog_path": "12-vins-francais",
+        # PrestaShop, and its own menu links the strip. 118 pages of catalogue
+        # are read from the 6h cache; these three are read fresh, because a
+        # newly allocated bottle appears here first and this is a race.
+        "new_arrivals": "nouveaux-produits",
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
@@ -525,7 +529,17 @@ SHOPS = [
         "name": "pangee",
         "platform": "html",
         "url": "https://la-pangee.com/fr",
-        "catalog_paths": ["25-vins", "https://la-pangee.com/nouveaux-produits", "nouveaux-produits", "28-beaujolais"],
+        # One catalogue, and the strip read separately. The list carried
+        # /nouveaux-produits twice -- once absolute, once relative, both
+        # resolving to the same 111 products over 4 pages, so every run spent
+        # 8 pages reading it twice -- and 28-beaujolais, which all four paths
+        # together showed to be a subset: 25-vins states 801 on its own and
+        # the union of the four deduplicated to 805, where a disjoint
+        # beaujolais would have made it 844. The strip belongs on
+        # `new_arrivals`, where it is walked once, read fresh rather than from
+        # the 6h cache, and counted when it holds a wine the catalogue misses.
+        "catalog_paths": ["25-vins"],
+        "new_arrivals": "nouveaux-produits",
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
