@@ -177,6 +177,18 @@ NEW_ARRIVALS_PAGES = 3
 # starts four minutes before MAX_RUN_SECONDS cannot finish a catalogue, and an
 # unfinished retry is a TRUNCATED row where an accurate failure row was.
 RETRY_CLOCK_RESERVE_SECONDS = 240.0
+# A shop that *answers* is not a shop that failed. 401/403/407/451 is a
+# refusal and 404/410 is a door that is not there, and neither changes for
+# being asked a second time -- mesbourgognes answered HTTP 403 to every
+# request of a run, which is the same sentence naturavin and demainlesvins
+# said, and this project answers it by not going there. Only a connection
+# that broke (no status at all), a 5xx and a 429 are worth another attempt.
+NO_RETRY_STATUSES = frozenset({401, 403, 404, 405, 407, 410, 451})
+# And a refusal deserves its own word in the coverage table. Reported as
+# "unreachable" it reads as a network problem someone could fix, which is
+# how a shop that has closed its door to us stays on the list looking like
+# an outage.
+REFUSAL_STATUSES = frozenset({401, 403, 405, 407, 451})
 # Rows in the Actions step summary. The page has a 1MB ceiling and this is a
 # glance, not the record -- hits.json is still the whole of it.
 SUMMARY_ROW_CAP = 300
@@ -1651,6 +1663,7 @@ def main():
     skipped_count = 0
     silent_shops = []
     blocked_shops = []       # answered 200 with a bot challenge, not content
+    refused_shops = []       # answered, and the answer was no
     unreached = []           # verified shops the run never got to
     verified_names = [s["name"] for s in SHOPS if s.get("verified", True)]
     # Rotated so a binding budget does not starve the same tail every hour.
@@ -1742,9 +1755,17 @@ def main():
             break
         except crawler.UpstreamError as e:
             error_count += 1
-            retry_later.append((len(coverage), shop))
-            coverage.append(coverage_row(shop, status="unreachable"))
-            print(f"[{shop['name']}] unreachable: {e}")
+            code = getattr(e, "status_code", None)
+            if code not in NO_RETRY_STATUSES:
+                retry_later.append((len(coverage), shop))
+            if code in REFUSAL_STATUSES:
+                refused_shops.append(f"{shop['name']} (HTTP {code})")
+                coverage.append(coverage_row(shop, status=f"refused {code}"))
+                print(f"[{shop['name']}] refused us: HTTP {code}. Not retried -- "
+                      f"a shop answering 'no' is answered by not going there")
+            else:
+                coverage.append(coverage_row(shop, status="unreachable"))
+                print(f"[{shop['name']}] unreachable: {e}")
         except Exception as e:
             error_count += 1
             coverage.append(coverage_row(shop, status="parse error"))
@@ -1894,6 +1915,10 @@ def main():
     notes = {
         "Shops that returned nothing": silent_shops,
         "Blocked by a bot challenge": blocked_shops,
+        # Named separately from an outage on purpose: nothing in this repo
+        # will make a 403 go away, so the only useful next step is a human
+        # deciding whether the shop stays on the list.
+        "Refused us -- not retried": refused_shops,
         "Matched but sold out everywhere": sold_out_only,
         unseen_title: unseen,
         "Shops not reached this run": [s["name"] for s in unreached],

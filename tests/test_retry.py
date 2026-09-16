@@ -76,3 +76,22 @@ def test_no_retry_when_the_first_pass_ran_out_of_budget(pipeline, capsys):
 def _coverage(pipeline):
     import json
     return json.loads((pipeline.tmp / "coverage.json").read_text())
+
+
+def test_a_shop_that_refuses_is_not_asked_twice(pipeline, capsys):
+    # mesbourgognes answered HTTP 403 to every request of a live run. That is
+    # the sentence naturavin and demainlesvins said, and it is answered by not
+    # going there -- a second pass would only be asking twice.
+
+    client = pipeline(BODIES, refuse_hosts={"shopify.test": 403})
+    assert client.reopened == [], "a 403 was retried"
+    out = capsys.readouterr().out
+    assert "refused us: HTTP 403" in out
+    rows = {r["shop"]: r for r in _coverage(pipeline)}
+    assert rows["zzz-shopify"]["status"] == "refused 403", \
+        "a refusal still reads as an outage someone could fix"
+
+
+def test_a_server_error_is_still_retried(pipeline):
+    client = pipeline(BODIES, refuse_hosts={"shopify.test": 503})
+    assert client.reopened, "a 503 is transient and must get a second attempt"

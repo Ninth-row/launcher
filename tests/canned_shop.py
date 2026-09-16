@@ -67,7 +67,7 @@ class FakeCrawler:
     for the real Crawler that main() constructs for itself."""
 
     def __init__(self, bodies, max_requests=1000, fail_hosts=(),
-                 flaky_hosts=None, challenge_hosts=()):
+                 flaky_hosts=None, challenge_hosts=(), refuse_hosts=None):
         self.bodies = bodies
         self.max_requests = max_requests
         self.request_count = 0
@@ -77,6 +77,9 @@ class FakeCrawler:
         # after a pause looks like from inside the run.
         self.flaky_hosts = dict(flaky_hosts or {})
         self.challenge_hosts = set(challenge_hosts)
+        # host substring -> the status it answers with. A shop that answers is
+        # not a shop that failed, and the run has to tell the two apart.
+        self.refuse_hosts = dict(refuse_hosts or {})
         self.reopened = []
         self.urls = []
 
@@ -94,6 +97,9 @@ class FakeCrawler:
         for host in self.challenge_hosts:
             if host in url:
                 raise crawler.Challenged(url)
+        for host, code in self.refuse_hosts.items():
+            if host in url:
+                raise crawler.UpstreamError(f"HTTP {code}", status_code=code)
         for host, left in self.flaky_hosts.items():
             if host in url and left > 0:
                 self.flaky_hosts[host] = left - 1

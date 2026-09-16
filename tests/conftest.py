@@ -31,9 +31,10 @@ def pipeline(monkeypatch, tmp_path):
 
     def run(bodies, dry_run=False, max_requests=1000, fail_hosts=(), force=False,
             max_run_seconds=0, max_pages=None, flaky_hosts=None,
-            challenge_hosts=()):
+            challenge_hosts=(), refuse_hosts=None):
         client = FakeCrawler(bodies, max_requests=max_requests, fail_hosts=fail_hosts,
-                             flaky_hosts=flaky_hosts, challenge_hosts=challenge_hosts)
+                             flaky_hosts=flaky_hosts, challenge_hosts=challenge_hosts,
+                             refuse_hosts=refuse_hosts)
         monkeypatch.setattr(crawler, "Crawler", lambda *a, **k: client)
         monkeypatch.setattr(scraper, "DRY_RUN", dry_run)
         monkeypatch.setattr(scraper, "FORCE_REPORT", force)
