@@ -35,6 +35,14 @@ BACKOFF_SCHEDULE = [5, 15, 45]
 MAX_ATTEMPTS = 3
 CIRCUIT_BREAKER_THRESHOLD = 3
 CACHE_TTL_SECONDS = 6 * 3600
+# Some pages exist in order to change. A new-arrivals strip is the shop
+# announcing what it just put on the shelf, and for an allocated grower that
+# announcement is the whole race -- serving it from a 6h cache means the run
+# that could have been first reads a page that predates the release. A
+# catalogue's twentieth page has no such claim on us, so this is opt-in per
+# call rather than a lower default: a shorter TTL everywhere would multiply
+# what we cost every shop for news that only appears in one place.
+FRESH_PAGE_TTL_SECONDS = 1800
 # Sized to read every catalogue to its end, not to a budget. Each shop states
 # its own size on page one, and one complete pass over all 23 verified shops is
 # 311 requests -- vinnouveau's 118 pages being most of it. 400 leaves room for
@@ -416,9 +424,24 @@ class Crawler:
     def _record_success(self, host):
         self._consecutive_failures[host] = 0
 
+    def reopen(self, url):
+        """Give one host a clean slate, for a deliberate second attempt.
+
+        The breaker is meant to stop a run hammering a host that is down, and
+        it does that by keeping it skipped for the *rest of the run*. That is
+        right while the run is still working through its list, and wrong once
+        the list is finished: a shop that failed at minute two has had twenty
+        quiet minutes by then, which is exactly the gap a rate limiter wants.
+        Only main()'s retry pass calls this, and only once per shop, so the
+        breaker still bounds what a single sweep can do to a host.
+        """
+        host = urlparse(url).netloc
+        self._broken_hosts.discard(host)
+        self._consecutive_failures[host] = 0
+
     # -- the fetch itself -------------------------------------------------
 
-    def get(self, url, params=None, _hops=0):
+    def get(self, url, params=None, _hops=0, max_age=None):
         """GET url through robots/rate-limit/backoff/cache/budget policy.
 
         Returns a FetchResult, or raises Disallowed / CircuitOpen /
@@ -448,7 +471,8 @@ class Crawler:
             # and go ask again -- the shop may have stopped challenging us.
             if cached and looks_like_challenge(cached.get("text")):
                 cached = None
-            if cached and (time.time() - cached["fetched_at"]) < CACHE_TTL_SECONDS:
+            ttl = CACHE_TTL_SECONDS if max_age is None else max_age
+            if cached and (time.time() - cached["fetched_at"]) < ttl:
                 return _result_from_cache(cached)
 
             if self.request_count >= self.max_requests:
@@ -488,7 +512,7 @@ class Crawler:
         if isinstance(result, _Redirect):
             if _hops >= MAX_REDIRECTS:
                 raise UpstreamError(f"more than {MAX_REDIRECTS} redirects from {url}")
-            return self.get(result.url, _hops=_hops + 1)
+            return self.get(result.url, _hops=_hops + 1, max_age=max_age)
         return result
 
     def _attempt_with_retries(self, full_url, host, headers, cached):

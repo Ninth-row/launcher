@@ -669,3 +669,44 @@ def test_an_unreachable_robots_txt_is_recorded_as_such(monkeypatch, tmp_path):
     client._robots_for("https://gone.example/shop")
     status, text = client.robots_seen["gone.example"]
     assert status is None and "unreachable" in text
+
+
+def test_a_caller_can_ask_for_a_fresher_copy(monkeypatch, tmp_cache):
+    """Some pages exist in order to change.
+
+    A new-arrivals strip is the shop announcing what it just put on the shelf,
+    and for an allocated grower that announcement is the whole race. Served
+    from the 6h catalogue cache, the run that could have been first reads a
+    page written before the release.
+    """
+    call_count = {"n": 0}
+
+    def fake_get(url, headers=None, timeout=None, **kwargs):
+        call_count["n"] += 1
+        if url.endswith("/robots.txt"):
+            return FakeResp(200, "User-agent: *\n")
+        return FakeResp(200, "<html>new</html>")
+
+    monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
+    c = make_crawler(tmp_cache)
+
+    c.get("https://shop.example.com/nouveaux-produits")
+    after_first = call_count["n"]
+
+    # The entry is well inside the catalogue TTL and well outside the short one.
+    entry = c._read_cache("https://shop.example.com/nouveaux-produits")
+    entry["fetched_at"] = time_module.time() - crawler_mod.FRESH_PAGE_TTL_SECONDS - 1
+    c._write_cache("https://shop.example.com/nouveaux-produits", entry)
+
+    assert c.get("https://shop.example.com/nouveaux-produits").from_cache is True, \
+        "the default TTL should still serve this page from cache"
+    c.get("https://shop.example.com/nouveaux-produits",
+          max_age=crawler_mod.FRESH_PAGE_TTL_SECONDS)
+    assert call_count["n"] > after_first, \
+        "max_age did not override the catalogue cache TTL"
+
+
+def test_the_short_ttl_is_shorter_than_the_catalogue_one(monkeypatch):
+    # Asserted as a relationship, not as today's numbers: the whole point is
+    # that news is read sooner than a twentieth catalogue page.
+    assert crawler_mod.FRESH_PAGE_TTL_SECONDS < crawler_mod.CACHE_TTL_SECONDS

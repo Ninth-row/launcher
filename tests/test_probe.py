@@ -35,7 +35,7 @@ class StubCrawler:
         self.skipped_disallowed = []
         self.calls = []
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.request_count += 1
         self.calls.append(url)
         for fragment, outcome in self._handlers.items():
@@ -525,7 +525,7 @@ def test_capturing_pages_does_not_cancel_the_probe(monkeypatch, tmp_path, capsys
     probed = []
 
     class Recording(StubCrawler):
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             probed.append(url)
             return crawler.FetchResult(200, "<html><body><p>x</p></body></html>")
 
@@ -725,7 +725,7 @@ class MapCrawler:
         self.request_count = 0
         self.skipped_disallowed = []
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         self.request_count += 1
         self.asked.append(url)
         if url in self.pages:
@@ -987,7 +987,7 @@ def test_a_bot_challenge_does_not_abort_the_whole_probe(monkeypatch, capsys):
     candidate raised one -- and an unhandled Challenged does not merely lose
     that shop, it takes down the run and every other shop's results with it."""
     class Gated(StubCrawler):
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             raise crawler.Challenged(f"{url}: a script-only page")
 
     shop = {"name": "gated", "url": "https://gated.example", "platform": "html",
@@ -1016,7 +1016,7 @@ def test_the_probe_stops_itself_before_the_job_is_killed():
     fetched = []
 
     class Slow(StubCrawler):
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             fetched.append(url)
             return crawler.FetchResult(200, "<html><body><p>x</p></body></html>")
 
@@ -1033,7 +1033,7 @@ def test_the_probe_stops_itself_before_the_job_is_killed():
 def test_a_probe_with_no_deadline_is_unchanged():
     """The deadline is optional: every existing caller passes none."""
     class Dead(StubCrawler):
-        def get(self, url, params=None):
+        def get(self, url, params=None, max_age=None):
             raise crawler.UpstreamError("refused")
     shop = {"name": "x", "url": "https://x.example", "platform": "html",
             "item_selector": "div.product", "title_selector": "h2",

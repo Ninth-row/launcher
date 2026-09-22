@@ -66,14 +66,27 @@ class FakeCrawler:
     """Serves canned bodies by URL prefix and counts requests, standing in
     for the real Crawler that main() constructs for itself."""
 
-    def __init__(self, bodies, max_requests=1000, fail_hosts=()):
+    def __init__(self, bodies, max_requests=1000, fail_hosts=(),
+                 flaky_hosts=None, challenge_hosts=(), refuse_hosts=None):
         self.bodies = bodies
         self.max_requests = max_requests
         self.request_count = 0
         self.fail_hosts = set(fail_hosts)
+        # host substring -> how many more requests fail before it answers.
+        # This is what a shop that refuses a sustained crawl and then recovers
+        # after a pause looks like from inside the run.
+        self.flaky_hosts = dict(flaky_hosts or {})
+        self.challenge_hosts = set(challenge_hosts)
+        # host substring -> the status it answers with. A shop that answers is
+        # not a shop that failed, and the run has to tell the two apart.
+        self.refuse_hosts = dict(refuse_hosts or {})
+        self.reopened = []
         self.urls = []
 
-    def get(self, url, params=None):
+    def reopen(self, url):
+        self.reopened.append(url)
+
+    def get(self, url, params=None, max_age=None):
         self.request_count += 1
         self.urls.append(url)
         if self.request_count > self.max_requests:
@@ -81,6 +94,16 @@ class FakeCrawler:
         for host in self.fail_hosts:
             if host in url:
                 raise crawler.UpstreamError("Connection refused")
+        for host in self.challenge_hosts:
+            if host in url:
+                raise crawler.Challenged(url)
+        for host, code in self.refuse_hosts.items():
+            if host in url:
+                raise crawler.UpstreamError(f"HTTP {code}", status_code=code)
+        for host, left in self.flaky_hosts.items():
+            if host in url and left > 0:
+                self.flaky_hosts[host] = left - 1
+                raise crawler.UpstreamError("Connection reset by peer")
         page = int((params or {}).get("page", 1))
         for prefix, body in self.bodies.items():
             if url.startswith(prefix):

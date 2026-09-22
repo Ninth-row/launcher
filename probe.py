@@ -103,14 +103,14 @@ class CannedCrawler:
         self.request_count = 0
         self.max_requests = 1 + follow_budget
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, max_age=None):
         if not self._served:
             self._served = True
             return self._response
         if self._live is not None and self._follow_budget > 0:
             self._follow_budget -= 1
             self.request_count += 1
-            return self._live.get(url, params=params)
+            return self._live.get(url, params=params, max_age=max_age)
         return self._empty
 
 

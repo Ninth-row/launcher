@@ -792,6 +792,80 @@ HTTP header or printed.
   that merely parsed (a portfolio page, a sub-category), and giving those
   first place spends the budget on a slice of the shop instead of the whole
   of it.
+- A catalogue is not always the whole shop, and being first is the point.
+  winenot's catalogue is a `Couleur / Type` facet union, so a listing carrying
+  no colour is not in it: the same probe run found **0** titles containing
+  "pack" across the crawled catalogue and **15** on `/nouveaux-produits`,
+  including `4963-pack-overnoy-savagnin-2018` at EUR 580 and
+  `4979-pack-labet-la-reine`, both in stock and neither ever reported. An
+  optional `new_arrivals` path on a SHOPS entry is walked after the catalogue
+  with a fresh seen-set, capped at `NEW_ARRIVALS_PAGES` because a new-arrivals
+  strip is the newest N products and not a second catalogue, and deduplicated
+  against the catalogue's URLs. What is left over is `off_catalogue`, and it
+  is a *number the digest states* -- "read incompletely" -- because a shop we
+  read partially otherwise prints a clean coverage row. It is a mitigation,
+  not a cure: the cure is finding the path that states the whole range.
+- A first-pass failure is not evidence a shop is down. A shop reported
+  `unreachable` contributes no digest rows, nothing to the price pool, and a
+  "watched but found nowhere" line its aliases did not earn -- and vinnaturel
+  answered a hand probe with a healthy 66KB catalogue minutes after a run had
+  written it off. `main()` retries `UpstreamError` and `CircuitOpen` **once**,
+  after every other shop is read, calling `Crawler.reopen()` to clear the
+  breaker for that host alone: by then it has had twenty quiet minutes, which
+  is the pause a rate limiter is asking for. Nothing else is retried --
+  `Challenged`, `Disallowed`, an empty JS storefront and a parse error all say
+  the same thing twice, and a challenge is a shop saying no. Neither is a
+  status that *answered*: `NO_RETRY_STATUSES` keeps 401/403/404/405/407/410/451
+  out of the second pass, because mesbourgognes answered HTTP 403 to every
+  request of a run and that is the sentence naturavin and demainlesvins said.
+  A refusal also gets its own word in the coverage table (`refused 403`) and
+  its own digest note: reported as "unreachable" it reads as a network fault
+  someone could fix, which is how a shop that has closed its door stays on the
+  list looking like an outage. Two guards are
+  load-bearing: the retry is skipped entirely when the first pass left shops
+  unreached (what budget remains belongs to a shop nobody has read once), and
+  a recovered shop **replaces** its failure row in `coverage` rather than
+  appending, or one shop is counted twice in every total. Recovery goes
+  through the same `absorb()` the first pass uses -- a shop read on the second
+  attempt must reach the digest, the market pool and the sold-out note by
+  exactly the same route -- and is named in the digest as "Failed once, read
+  on retry", because a flaky shop otherwise prints a clean row until the day
+  the retry fails too and it looks newly broken.
+- A group is worth what it holds in *distinct* wines, and only then in
+  priced blocks. winenot's `/nouveaux-produits` carries its real grid --
+  `#js-product-list > .products.row`, four cards, three of them the packs no
+  catalogue of that shop lists -- beside a cross-sell carousel rendering the
+  same three Cortons *twice*. Six priced blocks beat three, so the carousel
+  won every run: the strip was walked, parsed cleanly, added nothing, and the
+  log said so in no line at all, while PACK LABET LA REINE sat there in stock
+  at EUR 290. Six blocks for three wines is three wines, which makes it 3
+  against 3, and the tie goes to the parent describing more products, priced
+  or not -- the carousel points at 3 pages, the grid at 4, because its
+  priceless fourth card is still a card. Asking the markup which of them is
+  the grid beats asking which came first in the document, which is all `max`
+  over equal counts was doing.
+  `tests/fixtures/winenot-new-arrivals-excerpt.html` keeps both groups as
+  real markup.
+- The new-arrivals walk states its result on every outcome, including the
+  boring one. Its first live run added nothing and printed nothing, so "the
+  path is wrong", "the page is unreadable" and "the catalogue really does
+  hold everything" were indistinguishable from the log. The count is only
+  news when it is not zero; that it was *measured* is news every time.
+- One dead category must not black out a shop. `_walk_pages` raises when
+  *page one* fails, which is right for a shop with one catalogue and wrong for
+  a shop with six: a renamed category would take the whole range dark. A
+  failing start is now only the shop failing when *every* start failed;
+  otherwise it is logged, the row is marked TRUNCATED, and the rest are read.
+  `catalogue_starts` pins the measured-best catalogue first, so this degrades
+  in the right order.
+- **vinnaturel** is Cave de Trinquetaille, PrestaShop 1.6, and it was the
+  third shop judged from the wrong page -- its landing page is not its
+  catalogue, and reading it gave 12 products and a clean `ok` row for weeks.
+  Its own menu offers no "all wines" link, so the bottle range is three colour
+  categories (`/31-vins-rouges-bouteilles-` alone states "Il y a 108 produits"
+  and pages to `?p=6`, plus `/28` blancs and `/29` roses). Bag-in-box lives
+  separately under `/24` and stays out on purpose: a 3L BIB is not a bottle
+  and would enter the price pool as one.
 - Catalogues are paged. Any new fetcher must walk pages, not just read the
   first one -- seeing only page one turns a real hit into a silent miss,
   which is the exact failure this project exists to avoid.
