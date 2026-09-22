@@ -203,7 +203,18 @@ async function api(path, opts) {
   if (text) { try { data = JSON.parse(text); } catch (e) { data = null; } }
   if (!res.ok) {
     var msg = (data && data.message) || (res.status + " " + res.statusText);
-    if (res.status === 401) { msg = "the token was rejected (401). It may have expired."; }
+    if (res.status === 401) {
+      // A rejected token is dead, and keeping it stored is what hides the
+      // cure: refreshAuth() reads "a token exists" and goes on showing the
+      // signed-in panel, so the paste box stays hidden and the only way back
+      // is to guess that "Forget token" is the button you want. Drop it and
+      // put the sign-in form back on screen, exactly as saveToken() already
+      // does when a freshly pasted token fails.
+      try { localStorage.removeItem(KEY); } catch (e2) {}
+      refreshAuth();
+      msg = "the token was rejected (401) — it has expired or been revoked. " +
+            "It is cleared; paste a new one below.";
+    }
     if (res.status === 403) { msg += " — the token probably lacks Actions or Issues write."; }
     if (res.status === 404) { msg += " — check the token can see " + REPO + "."; }
     throw new Error(msg);
