@@ -203,8 +203,29 @@ async function api(path, opts) {
   if (text) { try { data = JSON.parse(text); } catch (e) { data = null; } }
   if (!res.ok) {
     var msg = (data && data.message) || (res.status + " " + res.statusText);
-    if (res.status === 401) { msg = "the token was rejected (401). It may have expired."; }
-    if (res.status === 403) { msg += " — the token probably lacks Actions or Issues write."; }
+    if (res.status === 401) {
+      // A rejected token is dead, and keeping it stored is what hides the
+      // cure: refreshAuth() reads "a token exists" and goes on showing the
+      // signed-in panel, so the paste box stays hidden and the only way back
+      // is to guess that "Forget token" is the button you want. Drop it and
+      // put the sign-in form back on screen, exactly as saveToken() already
+      // does when a freshly pasted token fails.
+      try { localStorage.removeItem(KEY); } catch (e2) {}
+      refreshAuth();
+      msg = "the token was rejected (401) — it has expired or been revoked. " +
+            "It is cleared; paste a new one below.";
+    }
+    if (res.status === 403) {
+      // "lacks Actions or Issues write" was the only explanation offered, and
+      // it sent the reader to the permissions list when the real cause was one
+      // screen earlier: this repo is org-owned, a fine-grained token whose
+      // resource owner is a *person* can still read a public repo, so the page
+      // says "Signed in" and then 403s on every write. Name that first.
+      msg += " — check the token's resource owner is " + esc(REPO.split("/")[0]) +
+             " and not your personal account (a public repo reads fine either way), " +
+             "that the organisation has approved it, and that it has Actions and " +
+             "Issues set to Read and write.";
+    }
     if (res.status === 404) { msg += " — check the token can see " + REPO + "."; }
     throw new Error(msg);
   }
@@ -753,12 +774,21 @@ Hourly, {esc(defaults.get("deal_threshold", "?"))}× reference flags a deal.</di
   <b>this browser only</b> (<code>localStorage</code>), and calls GitHub directly.</div>
   <ol class="steps">
     <li>Open <a class="q" href="https://github.com/settings/personal-access-tokens/new">github.com/settings/personal-access-tokens/new</a>.</li>
-    <li>Resource owner: your account. Repository access: <b>Only select repositories</b> → <code>{esc(REPO)}</code>.</li>
+    <li>Resource owner: <b>{esc(REPO.split("/")[0])}</b> — the account or organisation that
+        owns the repo, <i>not</i> your personal account when those differ. This one is
+        org-owned, and a token owned by a person authenticates fine and then fails every
+        write with <i>"Resource not accessible by personal access token"</i>, because a
+        public repo answers reads to anybody. Repository access:
+        <b>Only select repositories</b> → <code>{esc(REPO)}</code>.</li>
     <li>Repository permissions: <b>Actions</b> = Read and write, <b>Issues</b> = Read and write.
         Optionally <b>Secrets</b> = Read-only, which lets this page warn you when the email
         secrets are missing (it can only ever read their <i>names</i> — no endpoint returns a value).</li>
     <li>Expiration: whatever you like — 90 days is fine, you just paste a new one here after.</li>
-    <li>Generate, copy, paste below.</li>
+    <li>Generate, copy, paste below. An organisation may hold the token for approval
+        (<a class="q" href="https://github.com/organizations/{esc(REPO.split("/")[0])}/settings/personal-access-token-requests">pending
+        requests</a>) and must allow fine-grained tokens at all
+        (<a class="q" href="https://github.com/organizations/{esc(REPO.split("/")[0])}/settings/personal-access-tokens">token
+        settings</a>); until then it reads but cannot write.</li>
   </ol>
   <div class="field">
     <label for="pat">Token</label>
