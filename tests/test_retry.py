@@ -7,8 +7,7 @@ pool, and a "watched but found nowhere" line its aliases did not earn. So a
 transient failure gets exactly one more attempt once every other shop has been
 read -- and a refusal gets none, because asking twice is still asking.
 """
-import crawler
-import scraper
+import json
 
 from canned_shop import product, shopify, woo, woo_product
 
@@ -36,7 +35,6 @@ def test_the_recovered_shop_reaches_the_digest_and_the_pool(pipeline):
     body = "\n".join(pipeline.sent)
     assert "Zzz Domaine" in body, "a recovered shop's hit never reached the email"
 
-    import json
     store = json.loads((pipeline.tmp / "observations.json").read_text())
     assert any(r["shop"] == "zzz-shopify" for r in store["records"]), \
         "a recovered shop's prices never reached the market pool"
@@ -66,7 +64,7 @@ def test_a_shop_that_is_really_down_stays_a_failure(pipeline, capsys):
     assert rows["zzz-shopify"]["status"] == "unreachable"
 
 
-def test_no_retry_when_the_first_pass_ran_out_of_budget(pipeline, capsys):
+def test_no_retry_when_the_first_pass_ran_out_of_budget(pipeline):
     # A retry must never cost a shop that has not been read once. With shops
     # left unreached, what budget remains belongs to them.
     client = pipeline(BODIES, flaky_hosts={"shopify.test": 1}, max_requests=2)
@@ -74,7 +72,6 @@ def test_no_retry_when_the_first_pass_ran_out_of_budget(pipeline, capsys):
 
 
 def _coverage(pipeline):
-    import json
     return json.loads((pipeline.tmp / "coverage.json").read_text())
 
 

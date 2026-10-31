@@ -435,9 +435,9 @@ class Crawler:
         Only main()'s retry pass calls this, and only once per shop, so the
         breaker still bounds what a single sweep can do to a host.
         """
-        host = urlparse(url).netloc
+        host = _host_of(url)
         self._broken_hosts.discard(host)
-        self._consecutive_failures[host] = 0
+        self._record_success(host)
 
     # -- the fetch itself -------------------------------------------------
 
