@@ -963,6 +963,7 @@ def _paged(shop, crawler_client, url, params_for_page, page_size, extract):
         try:
             resp = crawler_client.get(url, params=params_for_page(page))
             fetched += 1
+            resp.raise_for_status()
         except crawler.BudgetExceeded:
             print(
                 f"[{shop['name']}] request budget exhausted after page {page - 1}; "
@@ -970,7 +971,23 @@ def _paged(shop, crawler_client, url, params_for_page, page_size, extract):
             )
             truncated = True
             break
-        resp.raise_for_status()
+        except crawler.FetchError as e:
+            # The same rule the HTML walk uses, for the same reason: page 1
+            # failing is the shop failing and re-raises with its own word,
+            # while a later page failing keeps what was already read.
+            # raise_for_status moved inside the try to get it -- it sat below
+            # this block, so a 500 on page 3 of a Shopify catalogue discarded
+            # pages 1 and 2 on its way out, and a breaker tripping mid-walk
+            # did the same. A JSON catalogue ends by answering an empty or
+            # short page (handled below), so reaching here is always the walk
+            # stopping early, which is what TRUNCATED says.
+            if page == 1:
+                raise
+            print(f"[{shop['name']}] page {page} stopped the walk "
+                  f"({type(e).__name__}: {e}); keeping the {page - 1} page(s) "
+                  f"already read, catalogue TRUNCATED")
+            truncated = True
+            break
         records = extract(resp.json())
         if not records:
             break
@@ -1179,7 +1196,10 @@ def _price_from_detail_pages(shop, items, crawler_client):
         try:
             page = crawler_client.get(item["url"])
             page.raise_for_status()
-        except (crawler.BudgetExceeded, crawler.CircuitOpen):
+        except (crawler.BudgetExceeded, crawler.CircuitOpen,
+                crawler.Disallowed):
+            # All three are the host saying "not this run" rather than "not
+            # this page", so there is nothing to gain from the next one.
             break
         except (crawler.UpstreamError, crawler.Challenged):
             continue
@@ -1217,7 +1237,7 @@ def _fetch_via_producer_index(shop, index_html, index_url, crawler_client):
         try:
             page = crawler_client.get(url)
             page.raise_for_status()
-        except (crawler.BudgetExceeded, crawler.UpstreamError):
+        except crawler.FetchError:
             break
         # One bottle on a grower's page is still that grower's bottle: the
         # "is this a catalogue" test does not apply once we got here from
@@ -1351,10 +1371,43 @@ def _walk_pages(shop, crawler_client, start, pages_left, seen_urls, max_age=None
             # last one" -- WordPress 404s a paged URL past the end. Raising
             # here threw away every page already read and reported a shop
             # that answered every request as unreachable.
+            #
+            # No `truncated` here on purpose: a 404 past the end *is* the end
+            # of the catalogue, and flagging it would leave every such shop
+            # permanently TRUNCATED.
             if page == 1:
                 raise
             print(f"[{shop['name']}] page {page} returned {e}; treating page "
                   f"{page - 1} as the last one")
+            break
+        except crawler.FetchError as e:
+            # Everything else the crawler can raise: Disallowed, CircuitOpen,
+            # Challenged. This branch is the whole reason the base class is
+            # named rather than a tuple of subclasses -- it was
+            # `crawler.UpstreamError` alone, so Disallowed and CircuitOpen
+            # walked straight past every handler in this module and out of
+            # fetch_html, where main() turned them into a 0-product row.
+            # Every page already parsed went with them: a breaker tripping on
+            # page 40 of vinnouveau's 118 threw away all 40, along with that
+            # shop's hits, its contribution to the price pool and its
+            # sold-out rows, and the digest then blamed the aliases with a
+            # "found nowhere" line the shop had not earned.
+            #
+            # Page 1 still re-raises, and re-raises *itself* rather than
+            # something generic: main() has a handler per FetchError and they
+            # write different coverage rows -- robots.txt, blocked, circuit
+            # open -- and a challenge in particular must keep saying
+            # "blocked", because it is a shop saying no.
+            #
+            # Unlike the UpstreamError case above this one does set
+            # `truncated`: we stopped before the catalogue did, which is
+            # exactly what that flag means.
+            if page == 1:
+                raise
+            print(f"[{shop['name']}] page {page} stopped the walk "
+                  f"({type(e).__name__}: {e}); keeping the {page - 1} page(s) "
+                  f"already read, catalogue TRUNCATED")
+            truncated = True
             break
         if not resp.text.strip():
             if page == 1 and start == shop["url"]:
@@ -1445,7 +1498,7 @@ def fetch_html(shop, crawler_client):
             (fetched, page_truncated, page_items, page_html, page_how,
              stated) = _walk_pages(shop, crawler_client, start,
                                    MAX_PAGES_PER_SHOP, seen_urls)
-        except (crawler.UpstreamError, EmptyResponseError) as e:
+        except (crawler.FetchError, EmptyResponseError) as e:
             failed_starts += 1
             if failed_starts == len(starts):
                 raise
@@ -1492,7 +1545,10 @@ def fetch_html(shop, crawler_client):
         try:
             index = crawler_client.get(index_url)
             index.raise_for_status()
-        except (crawler.BudgetExceeded, crawler.UpstreamError, crawler.Challenged):
+        except crawler.FetchError:
+            # A supplementary reader may never cost the catalogue, so this
+            # catches the base class: the catalogue is already in `items`, and
+            # anything that reaches here escaping instead discards it.
             index = None
         if index is not None:
             items, how, added = _add_unseen(
@@ -1537,8 +1593,7 @@ def fetch_html(shop, crawler_client):
             _, _, new_items, _, new_how, _ = _walk_pages(
                 shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
                 max_age=crawler.FRESH_PAGE_TTL_SECONDS)
-        except (crawler.BudgetExceeded, crawler.UpstreamError,
-                crawler.Challenged, EmptyResponseError) as e:
+        except (crawler.FetchError, EmptyResponseError) as e:
             print(f"[{shop['name']}] new arrivals {new_url} could not be read "
                   f"({type(e).__name__}: {e}); the catalogue alone was used")
         else:
@@ -1579,8 +1634,19 @@ def _fetch_via_pdf_list(shop, page_html, page_url, crawler_client):
     if not pdf_url:
         return []
 
-    document = crawler_client.get(pdf_url)
-    document.raise_for_status()
+    # Guarded like every other supplementary reader. This one is reached only
+    # when the HTML gave us nothing, so there is no partial catalogue to lose
+    # -- but an exception escaping here skipped the producer-index fallback
+    # that runs next, and a shop with both would lose the half it could still
+    # read. Said out loud, because a shop whose document is refused and whose
+    # index is empty would otherwise report a bare 0 products.
+    try:
+        document = crawler_client.get(pdf_url)
+        document.raise_for_status()
+    except crawler.FetchError as e:
+        print(f"[{shop['name']}] the document at {pdf_url} could not be read "
+              f"({type(e).__name__}: {e})")
+        return []
     pages, why = pdflist.extract_text(document.content)
     if pages is None:
         raise UnreadableDocumentError(f"{pdf_url}: {why}")

@@ -858,6 +858,37 @@ HTTP header or printed.
   otherwise it is logged, the row is marked TRUNCATED, and the rest are read.
   `catalogue_starts` pins the measured-best catalogue first, so this degrades
   in the right order.
+- A failed page is not a failed shop, and the handlers say so by naming
+  `crawler.FetchError` rather than a tuple of its subclasses. `get()` raises
+  five things -- `Disallowed`, `CircuitOpen`, `BudgetExceeded`, `Challenged`,
+  `UpstreamError` -- and five places in `scraper.py` enumerated the ones they
+  expected. `Disallowed` and `CircuitOpen` were missing from four of them, so
+  either one raised *after* a shop's first page walked out of `fetch_html`
+  untouched, and `main()` wrote a 0-product row and never called `absorb()`:
+  the pages already parsed, their hits, their prices and their sold-out rows
+  all went with it, and the digest then printed a "watched but found nowhere"
+  line the aliases had not earned. A breaker tripping on page 40 of
+  vinnouveau's 118 cost all 40, and needs no robots.txt to happen -- three
+  consecutive failures on a host is the whole trigger. robots is the other
+  route and it is live: winenot and pangee both publish `Disallow: /*?order=`
+  and `Disallow: /*&order=`, and winenot's own pager writes
+  `?page=36&order=product.name.asc`. (The PrestaShop default does *not*
+  disallow `/nouveaux-produits` -- checked on both shops, and vinnouveau
+  serves no robots.txt at all. A guess about what a platform's robots.txt
+  contains is not evidence; read the file.)
+  Two asymmetries inside that are load-bearing. **Page one still re-raises,
+  and re-raises itself**, because `main()` has a handler per exception and
+  they write different words -- `robots.txt`, `blocked`, `circuit open`,
+  `unreachable` -- and a challenge in particular has to keep saying "blocked",
+  since it is a shop saying no. **`UpstreamError` on a later page keeps its
+  own branch above the base-class one and sets no `truncated` flag**, because
+  several platforms end a catalogue by 404ing the next paged URL: folding it
+  in would mark every such shop permanently TRUNCATED and make the one cell
+  that decides whether a row is comparable with the shop's real selection
+  useless. Everything else that stops a walk early *is* truncation and says
+  so. A supplementary reader -- the producer index, the new-arrivals strip --
+  catches the base class with no page-one exception at all: the catalogue is
+  already in hand, and nothing a supplement does may cost it.
 - **vinnaturel** is Cave de Trinquetaille, PrestaShop 1.6, and it was the
   third shop judged from the wrong page -- its landing page is not its
   catalogue, and reading it gave 12 products and a clean `ok` row for weeks.
