@@ -66,6 +66,10 @@ def _repo_slug():
 
 
 REPO = _repo_slug()
+# The account or organisation that owns the repo. Written out four times
+# across two languages before this, and it decides the one instruction the
+# setup steps most needed to get right.
+OWNER = REPO.split("/", 1)[0]
 OUTPUT = Path(__file__).parent / "wine.html"
 
 CSS = """
@@ -160,11 +164,21 @@ JS = r"""
 "use strict";
 
 var REPO = window.WINE.repo;
+var OWNER = REPO.split("/")[0];
 var API = "https://api.github.com";
 var KEY = "wine.gh.pat";
 
 function $(id) { return document.getElementById(id); }
 function token() { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } }
+// Forgetting the token and putting the sign-in form back is one action, and
+// three places discover a dead token: a freshly pasted one that fails, the
+// button, and any call answered 401. Written out three times, anything added
+// here later would have reached two of them -- and the one it missed is the
+// 401 path, which fires unattended.
+function clearToken() {
+  try { localStorage.removeItem(KEY); } catch (e) {}
+  refreshAuth();
+}
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
 function esc(s) {
@@ -210,8 +224,7 @@ async function api(path, opts) {
       // is to guess that "Forget token" is the button you want. Drop it and
       // put the sign-in form back on screen, exactly as saveToken() already
       // does when a freshly pasted token fails.
-      try { localStorage.removeItem(KEY); } catch (e2) {}
-      refreshAuth();
+      clearToken();
       msg = "the token was rejected (401) — it has expired or been revoked. " +
             "It is cleared; paste a new one below.";
     }
@@ -221,7 +234,7 @@ async function api(path, opts) {
       // screen earlier: this repo is org-owned, a fine-grained token whose
       // resource owner is a *person* can still read a public repo, so the page
       // says "Signed in" and then 403s on every write. Name that first.
-      msg += " — check the token's resource owner is " + esc(REPO.split("/")[0]) +
+      msg += " — check the token's resource owner is " + esc(OWNER) +
              " and not your personal account (a public repo reads fine either way), " +
              "that the organisation has approved it, and that it has Actions and " +
              "Issues set to Read and write.";
@@ -286,16 +299,14 @@ async function saveToken() {
     loadRuns();
     checkSetup();
   } catch (e) {
-    try { localStorage.removeItem(KEY); } catch (e2) {}
-    refreshAuth();
+    clearToken();
     say("<b>That token didn't work:</b> " + esc(e.message), "bad");
   }
 }
 
 function forgetToken() {
-  try { localStorage.removeItem(KEY); } catch (e) {}
   $("setup").hidden = true;
-  refreshAuth();
+  clearToken();
   say("Token removed from this browser.", "");
 }
 
@@ -774,7 +785,7 @@ Hourly, {esc(defaults.get("deal_threshold", "?"))}× reference flags a deal.</di
   <b>this browser only</b> (<code>localStorage</code>), and calls GitHub directly.</div>
   <ol class="steps">
     <li>Open <a class="q" href="https://github.com/settings/personal-access-tokens/new">github.com/settings/personal-access-tokens/new</a>.</li>
-    <li>Resource owner: <b>{esc(REPO.split("/")[0])}</b> — the account or organisation that
+    <li>Resource owner: <b>{esc(OWNER)}</b> — the account or organisation that
         owns the repo, <i>not</i> your personal account when those differ. This one is
         org-owned, and a token owned by a person authenticates fine and then fails every
         write with <i>"Resource not accessible by personal access token"</i>, because a
@@ -785,9 +796,9 @@ Hourly, {esc(defaults.get("deal_threshold", "?"))}× reference flags a deal.</di
         secrets are missing (it can only ever read their <i>names</i> — no endpoint returns a value).</li>
     <li>Expiration: whatever you like — 90 days is fine, you just paste a new one here after.</li>
     <li>Generate, copy, paste below. An organisation may hold the token for approval
-        (<a class="q" href="https://github.com/organizations/{esc(REPO.split("/")[0])}/settings/personal-access-token-requests">pending
+        (<a class="q" href="https://github.com/organizations/{esc(OWNER)}/settings/personal-access-token-requests">pending
         requests</a>) and must allow fine-grained tokens at all
-        (<a class="q" href="https://github.com/organizations/{esc(REPO.split("/")[0])}/settings/personal-access-tokens">token
+        (<a class="q" href="https://github.com/organizations/{esc(OWNER)}/settings/personal-access-tokens">token
         settings</a>); until then it reads but cannot write.</li>
   </ol>
   <div class="field">

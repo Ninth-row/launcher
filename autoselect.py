@@ -162,13 +162,13 @@ def _product_links_under(element):
     by target. A grid of cards points at one page per card; a cross-sell
     strip of the same size points at no more, and usually fewer once its
     priceless neighbours are counted in.
+
+    Through _linked_elements rather than its own walk: that generator plus
+    _link_target's filter set is this module's single definition of "a link
+    out of here", and a private copy beside it is the shape that drifts.
     """
-    targets = set()
-    for node in element.find_all(True):
-        target = _link_target(node)
-        if target:
-            targets.add(target)
-    return len(targets)
+    return len({target for _, target in _linked_elements(element)})
+
 
 def _product_link(element):
     # The element may *be* the link rather than contain one: a data-url
@@ -377,7 +377,7 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
     # meet, and stop the moment a level is busy enough. Only ever reached
     # when the level below returned too little, so it can add a grid where
     # there was none but cannot replace one that was already found.
-    best = []
+    best, best_distinct = [], 0
     for level in range(GROUP_CLIMB):
         by_parent = {}
         for block in blocks:
@@ -404,12 +404,24 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
         # 4, because its priceless fourth card is still a card. Asking the
         # markup "which of you is the grid" beats asking which came first in
         # the document, which is all `max` over equal counts was doing.
-        candidate = max(by_parent.values(),
-                        key=lambda g: (_distinct_products(g[1]),
-                                       _product_links_under(g[0])))
-        if _distinct_products(candidate[1]) > _distinct_products(best):
-            best = candidate[1]
-        if _distinct_products(best) >= min_blocks:
+        #
+        # Scored once per group and kept, rather than re-derived: the count
+        # decided four things in six lines, and a rule read from four places
+        # is a rule that gets changed in three. The tie-break is asked only of
+        # the groups actually tied at the top, because it walks a whole
+        # subtree -- on one fixture that was 3133 of 6277 nodes scanned to
+        # break a tie between a single group and itself.
+        scored = [(_distinct_products(blocks), (ancestor, blocks))
+                  for ancestor, blocks in by_parent.values()]
+        most = max(count for count, _ in scored)
+        tied = [group for count, group in scored if count == most]
+        if len(tied) > 1:
+            winner = max(tied, key=lambda g: _product_links_under(g[0]))[1]
+        else:
+            winner = tied[0][1]
+        if most > best_distinct:
+            best, best_distinct = winner, most
+        if best_distinct >= min_blocks:
             break
 
     if len(best) < min_blocks:

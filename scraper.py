@@ -177,18 +177,23 @@ NEW_ARRIVALS_PAGES = 3
 # starts four minutes before MAX_RUN_SECONDS cannot finish a catalogue, and an
 # unfinished retry is a TRUNCATED row where an accurate failure row was.
 RETRY_CLOCK_RESERVE_SECONDS = 240.0
-# A shop that *answers* is not a shop that failed. 401/403/407/451 is a
-# refusal and 404/410 is a door that is not there, and neither changes for
-# being asked a second time -- mesbourgognes answered HTTP 403 to every
-# request of a run, which is the same sentence naturavin and demainlesvins
-# said, and this project answers it by not going there. Only a connection
-# that broke (no status at all), a 5xx and a 429 are worth another attempt.
-NO_RETRY_STATUSES = frozenset({401, 403, 404, 405, 407, 410, 451})
-# And a refusal deserves its own word in the coverage table. Reported as
-# "unreachable" it reads as a network problem someone could fix, which is
-# how a shop that has closed its door to us stays on the list looking like
-# an outage.
+# A shop that *answers* is not a shop that failed, and a refusal deserves its
+# own word in the coverage table: reported as "unreachable" it reads as a
+# network problem someone could fix, which is how a shop that has closed its
+# door to us stays on the list looking like an outage. mesbourgognes answered
+# HTTP 403 to every request of a run, which is the same sentence naturavin and
+# demainlesvins said, and this project answers it by not going there.
 REFUSAL_STATUSES = frozenset({401, 403, 405, 407, 451})
+# A door that is not there. Nobody closed it, so it is not a refusal and gets
+# no refusal note -- but it is just as settled, and a second ask gets the same
+# 404.
+NOT_THERE_STATUSES = frozenset({404, 410})
+# So only a connection that broke (no status at all), a 5xx and a 429 are
+# worth another attempt. Derived rather than written out a second time: the
+# two sets are read three lines apart in main(), and a status added to one
+# literal and not the other is either retried while being printed as "refused
+# us" or refused-labelled while being retried.
+NO_RETRY_STATUSES = REFUSAL_STATUSES | NOT_THERE_STATUSES
 # Rows in the Actions step summary. The page has a 1MB ceiling and this is a
 # glance, not the record -- hits.json is still the whole of it.
 SUMMARY_ROW_CAP = 300
@@ -1236,6 +1241,32 @@ def _fetch_via_producer_index(shop, index_html, index_url, crawler_client):
     return items
 
 
+def _shop_url(shop, path):
+    """A shop-relative configured path, resolved against the shop's own root.
+
+    The trailing slash matters: urljoin against "https://x.test/fr" drops the
+    "fr". Written out three times before this, once per path key.
+    """
+    return urljoin(shop["url"].rstrip("/") + "/", path)
+
+
+def _add_unseen(items, extra, how, fallback_how):
+    """Add what a supplementary source found that the catalogue did not.
+
+    Both supplementary readers -- the producer index and the new-arrivals
+    strip -- dedupe against the catalogue's URLs, append, and count what was
+    left over. The two copies had already drifted on what a missing url key
+    means, which is how a shared rule stops being shared. Returns the items,
+    the (possibly adopted) `how`, and how many were added.
+    """
+    known = {i["url"] for i in items if i.get("url")}
+    fresh = [i for i in extra if i.get("url") and i["url"] not in known]
+    if fresh:
+        items = list(items) + fresh
+        how = how or fallback_how
+    return items, how, len(fresh)
+
+
 def catalogue_starts(shop, now=None):
     """Where to begin reading this shop's catalogue, and in what order.
 
@@ -1256,7 +1287,6 @@ def catalogue_starts(shop, now=None):
     categories -- not at this budget, and not at any budget, because the
     order never changed. Rotating costs nothing and makes the rest reachable.
     """
-    base = shop["url"].rstrip("/") + "/"
     paths = shop.get("catalog_paths") or (
         [shop["catalog_path"]] if shop.get("catalog_path") else [])
     if not paths:
@@ -1267,7 +1297,7 @@ def catalogue_starts(shop, now=None):
     # requests. vinovivo carried exactly that pair before it was removed.
     starts, seen = [], set()
     for path in paths:
-        url = urljoin(base, path)
+        url = _shop_url(shop, path)
         key = url.replace("http://", "https://").rstrip("/")
         if key not in seen:
             seen.add(key)
@@ -1409,15 +1439,15 @@ def fetch_html(shop, crawler_client):
     # measured-best catalogue (catalogue_starts pins it), so this degrades in
     # the right order, and the missing category shows up as a shortfall in
     # the coverage row's pages fraction rather than as a silent zero.
-    failures = []
+    failed_starts = 0
     for start in starts:
         try:
             (fetched, page_truncated, page_items, page_html, page_how,
              stated) = _walk_pages(shop, crawler_client, start,
                                    MAX_PAGES_PER_SHOP, seen_urls)
         except (crawler.UpstreamError, EmptyResponseError) as e:
-            failures.append(e)
-            if len(failures) == len(starts):
+            failed_starts += 1
+            if failed_starts == len(starts):
                 raise
             print(f"[{shop['name']}] catalogue {start} failed ({e}); "
                   f"reading the rest")
@@ -1458,21 +1488,20 @@ def fetch_html(shop, crawler_client):
     # that already reads its catalogue should not spend them.
     index_path = shop.get("producer_index")
     if index_path:
-        index_url = urljoin(shop["url"].rstrip("/") + "/", index_path)
+        index_url = _shop_url(shop, index_path)
         try:
             index = crawler_client.get(index_url)
             index.raise_for_status()
         except (crawler.BudgetExceeded, crawler.UpstreamError, crawler.Challenged):
             index = None
         if index is not None:
-            known = {i["url"] for i in items}
-            extra = [i for i in _fetch_via_producer_index(
-                shop, index.text, index_url, crawler_client)
-                if i["url"] not in known]
-            if extra:
-                items = list(items) + extra
-                how = how or "index"
-                print(f"[{shop['name']}] producer index added {len(extra)} "
+            items, how, added = _add_unseen(
+                items,
+                _fetch_via_producer_index(
+                    shop, index.text, index_url, crawler_client),
+                how, "index")
+            if added:
+                print(f"[{shop['name']}] producer index added {added} "
                       f"listing(s) the catalogue did not have")
 
     # The newest listings, read on purpose rather than hoped for.
@@ -1492,35 +1521,29 @@ def fetch_html(shop, crawler_client):
     # The count of listings it adds that the catalogue did not have is the
     # alarm: a healthy shop reads 0, and anything else says the catalogue is
     # not the whole shop.
+    #
+    # Said out loud on every outcome, including the boring ones. The first
+    # live run of this read winenot's strip, added nothing, and printed not
+    # one line about it -- so "the path is wrong", "the page is unreadable"
+    # and "the catalogue really does hold everything" were indistinguishable
+    # from the log, which is the exact silence this project exists to remove.
+    # The number is only news when it is not zero; that it was *measured* is
+    # news every time.
     off_catalogue = 0
     new_path = shop.get("new_arrivals")
     if new_path:
-        new_url = urljoin(shop["url"].rstrip("/") + "/", new_path)
-        new_items, new_how, failed = [], None, None
+        new_url = _shop_url(shop, new_path)
         try:
             _, _, new_items, _, new_how, _ = _walk_pages(
                 shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
                 max_age=crawler.FRESH_PAGE_TTL_SECONDS)
         except (crawler.BudgetExceeded, crawler.UpstreamError,
                 crawler.Challenged, EmptyResponseError) as e:
-            failed = f"{type(e).__name__}: {e}"
-        known = {i["url"] for i in items}
-        extra = [i for i in new_items if i.get("url") and i["url"] not in known]
-        off_catalogue = len(extra)
-        if extra:
-            items = list(items) + extra
-            how = how or new_how
-        # Said out loud on every outcome, including the boring ones. The first
-        # live run of this read winenot's strip, added nothing, and printed
-        # not one line about it -- so "the path is wrong", "the page is
-        # unreadable" and "the catalogue really does hold everything" were
-        # indistinguishable from the log, which is the exact silence this
-        # project exists to remove. The number is only news when it is not
-        # zero; that it was *measured* is news every time.
-        if failed:
             print(f"[{shop['name']}] new arrivals {new_url} could not be read "
-                  f"({failed}); the catalogue alone was used")
+                  f"({type(e).__name__}: {e}); the catalogue alone was used")
         else:
+            items, how, off_catalogue = _add_unseen(
+                items, new_items, how, new_how)
             print(f"[{shop['name']}] new arrivals {new_url}: read "
                   f"{len(new_items)} listing(s), {off_catalogue} not in the "
                   f"catalogue")
@@ -1752,7 +1775,7 @@ def main():
         # a shop we are reading incompletely, and only this number says so. In
         # the log alone it stayed invisible for weeks while two in-stock packs
         # went unfetched, so it reaches the digest.
-        if getattr(hits, "off_catalogue", 0):
+        if hits.off_catalogue:
             off_catalogue_shops.append(
                 f"{shop['name']}: {hits.off_catalogue} listing(s) on new "
                 f"arrivals that the catalogue does not carry")
@@ -1846,11 +1869,11 @@ def main():
     # never opened is the wrong trade.
     if retry_later and not unreached:
         for idx, shop in retry_later:
-            elapsed = time.monotonic() - started
-            if MAX_RUN_SECONDS > 0 and elapsed >= MAX_RUN_SECONDS - RETRY_CLOCK_RESERVE_SECONDS:
+            if (MAX_RUN_SECONDS > 0 and time.monotonic() - started
+                    >= MAX_RUN_SECONDS - RETRY_CLOCK_RESERVE_SECONDS):
                 print(f"[{shop['name']}] not retried: out of time for a second pass")
                 continue
-            if crawler_client.max_requests - crawler_client.request_count <= 0:
+            if crawler_client.request_count >= crawler_client.max_requests:
                 print(f"[{shop['name']}] not retried: out of request budget")
                 continue
             crawler_client.reopen(shop["url"])

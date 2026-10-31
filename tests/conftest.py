@@ -29,12 +29,14 @@ def pipeline(monkeypatch, tmp_path):
 
     monkeypatch.setattr(notify, "send_email", fake_send)
 
-    def run(bodies, dry_run=False, max_requests=1000, fail_hosts=(), force=False,
-            max_run_seconds=0, max_pages=None, flaky_hosts=None,
-            challenge_hosts=(), refuse_hosts=None):
-        client = FakeCrawler(bodies, max_requests=max_requests, fail_hosts=fail_hosts,
-                             flaky_hosts=flaky_hosts, challenge_hosts=challenge_hosts,
-                             refuse_hosts=refuse_hosts)
+    def run(bodies, dry_run=False, force=False, max_run_seconds=0,
+            max_pages=None, **crawler_kwargs):
+        # Everything the double itself understands -- max_requests and the
+        # fault-injection hosts -- is forwarded verbatim rather than relisted
+        # here with its default written out a second time. The next failure
+        # mode a test needs is then one edit in FakeCrawler, not two files
+        # whose defaults have to be kept in step by hand.
+        client = FakeCrawler(bodies, **crawler_kwargs)
         monkeypatch.setattr(crawler, "Crawler", lambda *a, **k: client)
         monkeypatch.setattr(scraper, "DRY_RUN", dry_run)
         monkeypatch.setattr(scraper, "FORCE_REPORT", force)
