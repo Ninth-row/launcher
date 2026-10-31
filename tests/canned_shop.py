@@ -67,7 +67,8 @@ class FakeCrawler:
     for the real Crawler that main() constructs for itself."""
 
     def __init__(self, bodies, max_requests=1000, fail_hosts=(),
-                 flaky_hosts=None, challenge_hosts=(), refuse_hosts=None):
+                 flaky_hosts=None, challenge_hosts=(), refuse_hosts=None,
+                 disallow=()):
         self.bodies = bodies
         self.max_requests = max_requests
         self.request_count = 0
@@ -77,6 +78,11 @@ class FakeCrawler:
         # after a pause looks like from inside the run.
         self.flaky_hosts = dict(flaky_hosts or {})
         self.challenge_hosts = set(challenge_hosts)
+        # URL substrings robots.txt refuses. A path, not just a host: the
+        # rules that bite this project are per-path (PrestaShop publishes
+        # `Disallow: /*?order=`), and robots is checked before anything else
+        # in get(), so it can land on any page of any walk.
+        self.disallow = set(disallow)
         # host substring -> the status it answers with. A shop that answers is
         # not a shop that failed, and the run has to tell the two apart.
         self.refuse_hosts = dict(refuse_hosts or {})
@@ -97,6 +103,9 @@ class FakeCrawler:
         for host in self.challenge_hosts:
             if host in url:
                 raise crawler.Challenged(url)
+        for fragment in self.disallow:
+            if fragment in url:
+                raise crawler.Disallowed(url)
         for host, code in self.refuse_hosts.items():
             if host in url:
                 raise crawler.UpstreamError(f"HTTP {code}", status_code=code)
