@@ -679,6 +679,15 @@ SHOPS = [
         "price_selector": "span.price",
         "verified": False,
     },
+    {
+        "name": "oenovinia",
+        "platform": "html",
+        "url": "https://www.oenovinia.com",
+        "item_selector": "div.product",
+        "title_selector": "h2.product-title",
+        "price_selector": "span.price",
+        "verified": False,
+    },
 ]
 
 
