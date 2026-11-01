@@ -178,9 +178,11 @@ allowed only because the fetch, parse and flag happen in one run against a
 real response. **`dashboard.py`** generates `wine.html`, a status page
 that also operates the scraper: its buttons call the GitHub REST API
 directly from the browser (`POST .../workflows/{file}/dispatches` to run
-the scraper or probe, polling `.../actions/runs` to show progress, `POST
-.../issues` to apply a config change), so nothing on it is a link out to
-the repo. The token that authorises this lives in the browser's
+the full pass, the hot pass or the probe, polling `.../actions/runs` to show
+progress, `POST .../issues` to apply a config change), so nothing on it is a
+link out to the repo. Every workflow a human is expected to start needs a
+button here: `hot.yml` shipped without one, which left the only way to run
+the thing built for speed buried in the Actions tab. The token that authorises this lives in the browser's
 `localStorage`, entered once per device -- never in the file.
 `wine.html` is generated, never hand-edited -- change `dashboard.py`
 instead.
@@ -204,7 +206,7 @@ shops added from research/guesswork rather than a real observed response
 --apply`, which fetches, parses and flags in a single run against a real
 response; never by hand.
 
-19 shops are currently verified and fetched on every run. Two shops since
+17 shops are currently verified and fetched on every run. Two shops since
 removed, vinovivo and purovino, spent months listed here as "prices are
 rendered client-side" — and that verdict was wrong twice over. The price *was* in
 their HTML; `autoselect._price_nodes` could not see it, because it accepted a
@@ -230,30 +232,47 @@ ignoring the Overnoy-Crinquand two lines up --
 `tests/fixtures/purewijnen-growers-excerpt.html` keeps that real markup as a
 namesake test -- but the link leads to prose.)
 
-Five remain unverified, and every one has a tested reason:
-  - **naturavin** blocks us with 403;
-  - **vinscheznous** no longer resolves;
-  - **vinnaturelbe** is PrestaShop 1.6 whose product miniatures carry a name,
-    a stock line and a "Détails" button and no price at all. Its real
-    catalogue is `/fr/categorie/11-acheter-en-ligne`, and
-    `probe_pages/capture.vin-naturel-be.fr-categorie-11-acheter-en-ligne.html`
-    has 40 product links and **zero currency markers** — catalogue mode, or a
-    price wall for guests, not client-side rendering. Its `/fr/vignerons`
-    index lists 41 growers and none of them is a producer we watch. It has no
-    PDF either, which is the question purewijnen made worth asking;
+Four remain unverified. Three have a tested reason; the fourth has not been
+probed yet:
+  - **weinfurore** was added through the issue form on 2026-11-01 (issue #25)
+    and has never been probed, so its platform and selectors are the form's
+    placeholders and its fixture is a placeholder too. It is the one entry
+    here with no measured reason -- run the probe before reading anything
+    into it;
+  - **feralart** is Wix, and the probe on 2026-11-01 got HTTP 400 and 404
+    across its candidate paths and "responded and parsed, but zero products
+    found" on the four that answered -- including `/champagne`,
+    `/champagne-casanova` and `/auction-wines`, whose captures are in
+    `probe_pages/`. Wix with no readable grid is the wineshopbiarritz shape,
+    so the question worth asking next is whether it publishes a document;
   - **cuvee3000** answers every path — `/`, `/en`, `/en/wines`, `/fr`, and
     `/vins.php`, which cannot exist — with the same ~1.3KB of title,
     `<noscript>` and one `<script>`: no anchor, no meta-refresh, and a body
     regenerated per request (1223–1463 bytes across eight paths,
     uncorrelated with path length). A framework redirect publishes a way out
     for every client; this publishes none, so the only exit is executing the
-    script. That is a gate, and it is answered by not going there;
+    script. That is a gate, and it is answered by not going there. As of the
+    probe on 2026-11-01 it no longer even serves that: all ten candidate URLs
+    came back **HTTP 307 with no Location**, which is a redirect naming
+    nowhere to go. A different no, and answered the same way;
   - **mifuguemiraisin** is closed, and not for a technical reason: its shop is
     Hiboutik (a French point-of-sale SaaS) at `mifuguemiraisin.hiboutik.com`,
     and **every one of the ten candidate URLs came back `robots.txt
     disallows`**. That is the platform saying no, and it is answered the same
     way a bot challenge is — by not going there. Its own domain is a shopfront
     with nothing to read, which is why the entry points at Hiboutik at all.
+
+**vinnaturelbe** was removed on request, and its finding is worth keeping:
+it is PrestaShop 1.6 whose product miniatures carry a name, a stock line and
+a "Détails" button and no price at all. Its catalogue was
+`/fr/categorie/11-acheter-en-ligne`, and
+`probe_pages/capture.vin-naturel-be.fr-categorie-11-acheter-en-ligne.html`
+has 40 product links and **zero currency markers** -- catalogue mode, or a
+price wall for guests, not client-side rendering. Its `/fr/vignerons` index
+listed 41 growers and not one producer we watch, and it had no PDF either,
+which is the question purewijnen made worth asking. It was listed above as
+"remains unverified" for a while after it had already left the config, which
+is how a list of reasons becomes a list of claims.
 
 **demainlesvins** was removed on request after it began answering every
 request with HTTP 403 -- three attempts, three refusals, then the circuit
@@ -317,11 +336,26 @@ is a shop saying no.
 
 Shops leave the list too. vinopura, volatilewines, purovino, biowijnclub,
 vinifine, lespeauxdevins, vinibee, vinovivo, puurwijnshop, petitescaves,
-vinnaturelbe and demainlesvins were removed on request.
+vinnaturelbe, demainlesvins, naturavin and vinscheznous were removed on
+request.
 Between them the first five were 726 products and no hits, and purovino had
 only just been made readable; the next three were 1320 products and two hits
 (vinibee's Richard Leroy) at 13 pages a run; puurwijnshop was 709 listings and
-never a hit, and demainlesvins had started refusing us with 403. Removing a
+never a hit, and demainlesvins had started refusing us with 403.
+**naturavin** is the one that left after *succeeding*: it is written up above
+as "blocks us with 403", and on 2026-11-01 it stopped doing that -- probe run
+41286960093 read it via the WooCommerce Store API, 87 products, and the
+probe verified it and corrected its platform from `html`. It was removed the
+same morning because those 87 products matched **none** of the 20 producers
+watched. The cost was small (87 products is one page at `WOO_PAGE_SIZE`, so
+about two requests) but a shop that stocks nothing we hunt is a shop whose
+only contribution is a row in the coverage table. It also showed that a
+documented 403 is a fact with a date on it, not a permanent property.
+**vinscheznous** simply stopped existing: `www.vinscheznous.com` has failed
+DNS resolution on every probe since, most recently run 41286960093 on
+2026-11-01 (`Failed to resolve ... Name or service not known`). A host that
+does not resolve cannot start answering again by itself, so there was nothing
+left to wait for. Removing a
 shop is config, not archaeology -- the entry, its fixture and its captures go
 together, and git remembers the rest. The one exception is a capture a test
 still reads for a *general* behaviour rather than for that shop: two
@@ -817,7 +851,8 @@ HTTP header or printed.
   the same thing twice, and a challenge is a shop saying no. Neither is a
   status that *answered*: `NO_RETRY_STATUSES` keeps 401/403/404/405/407/410/451
   out of the second pass, because mesbourgognes answered HTTP 403 to every
-  request of a run and that is the sentence naturavin and demainlesvins said.
+  request of a run and that is the sentence demainlesvins said before it was
+  removed.
   A refusal also gets its own word in the coverage table (`refused 403`) and
   its own digest note: reported as "unreachable" it reads as a network fault
   someone could fix, which is how a shop that has closed its door stays on the
@@ -898,7 +933,9 @@ HTTP header or printed.
   `FRESH_PAGE_TTL_SECONDS` instead: `hot_surface()` admits a Shopify shop
   (its `/products.json` doubles as a recency feed) or an HTML shop with a
   configured `new_arrivals` path, and `fetch_hot()` reads that and nothing
-  else -- about 24 requests and under two minutes. A shop with neither
+  else -- about 24 requests and under two minutes, over 10 of the 17 verified
+  shops. The dashboard has a **Run hot pass** button beside the full one; the
+  dry-run checkbox applies to either. A shop with neither
   surface is **not read at all** rather than read badly; a partial catalogue
   walk hourly would spend every shop's politeness budget to learn nothing the
   full pass will not learn properly. It goes through `check_shop(fetch=...)`,

@@ -195,8 +195,8 @@ RETRY_CLOCK_RESERVE_SECONDS = 240.0
 # own word in the coverage table: reported as "unreachable" it reads as a
 # network problem someone could fix, which is how a shop that has closed its
 # door to us stays on the list looking like an outage. mesbourgognes answered
-# HTTP 403 to every request of a run, which is the same sentence naturavin and
-# demainlesvins said, and this project answers it by not going there.
+# HTTP 403 to every request of a run, which is the sentence demainlesvins said
+# before it was removed, and this project answers it by not going there.
 REFUSAL_STATUSES = frozenset({401, 403, 405, 407, 451})
 # A door that is not there. Nobody closed it, so it is not a refusal and gets
 # no refusal note -- but it is just as settled, and a second ask gets the same
@@ -495,15 +495,6 @@ SHOPS = [
         "verified": True,
     },
     {
-        "name": "vinscheznous",
-        "platform": "html",
-        "url": "https://www.vinscheznous.com",
-        "item_selector": "div.product",
-        "title_selector": "h2.product-title",
-        "price_selector": "span.price",
-        "verified": False,
-    },
-    {
         "name": "cavepurjus",
         "platform": "html",
         "url": "https://www.cavepurjus.com",
@@ -521,12 +512,6 @@ SHOPS = [
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
-        "verified": True,
-    },
-    {
-        "name": "naturavin",
-        "platform": "woocommerce",
-        "url": "https://www.naturavin.be",
         "verified": True,
     },
     {

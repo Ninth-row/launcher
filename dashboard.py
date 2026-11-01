@@ -567,6 +567,14 @@ document.addEventListener("DOMContentLoaded", function () {
     }, on("opt-dry") ? "Scraper (dry run)" : "Scraper");
   });
 
+  $("run-hot").addEventListener("click", function () {
+    // hot.yml takes only dry_run; its budget and MAX_RUN_SECONDS are fixed in
+    // the workflow, because the whole point of this pass is that it is small.
+    runWorkflow("hot.yml", {
+      dry_run: String(on("opt-dry"))
+    }, on("opt-dry") ? "Hot pass (dry run)" : "Hot pass");
+  });
+
   $("run-probe").addEventListener("click", function () {
     runWorkflow("probe.yml", {
       only: val("probe-only"),
@@ -748,9 +756,15 @@ Hourly, {esc(defaults.get("deal_threshold", "?"))}× reference flags a deal.</di
 <div class="panel">
   <h3>Run the scraper</h3>
   <div class="sub">Starts the workflow from this page and watches it to the end.
-  The hourly schedule keeps running regardless.</div>
+  The schedule keeps running regardless.
+  <b>Run scraper</b> is the full pass: every catalogue to its end, ~410 requests,
+  11-32 minutes. <b>Run hot pass</b> reads only the page each shop puts a release
+  on first and reads it fresh rather than from the 6h cache -- about 24 requests
+  and under two minutes -- and emails only bottles never seen before. The dry-run
+  box below applies to either.</div>
   <div class="actions">
     <button class="btn go" id="run-scraper" data-needs-token disabled>Run scraper now</button>
+    <button class="btn" id="run-hot" data-needs-token disabled>Run hot pass</button>
     <button class="btn" id="run-probe" data-needs-token disabled>Run shop probe</button>
     <button class="btn sm" id="rebuild" data-needs-token disabled>Rebuild this page</button>
   </div>

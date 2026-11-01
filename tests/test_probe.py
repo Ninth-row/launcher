@@ -498,21 +498,28 @@ def test_an_unverified_shop_is_reported_with_its_reason(monkeypatch, capsys):
     """"Left unverified: mifuguemiraisin" sent three separate attempts into a
     twelve-minute log hunting the one line that said why. The reason is
     already in the result; it belongs in the summary."""
+    # A shop invented here rather than a real name from SHOPS: `--only` only
+    # accepts names that exist, so naming a live shop made this test fail the
+    # day that shop was removed -- which is the config-pinning CLAUDE.md warns
+    # against. What is being asserted is the summary's shape, not the roster.
+    monkeypatch.setattr(probe.scraper, "SHOPS", [
+        {"name": "zzz-probe", "platform": "html",
+         "url": "https://zzz.example", "verified": False}])
     failed = {
-        "shop": "naturavin", "status": "failed", "detected_platform": None,
+        "shop": "zzz-probe", "status": "failed", "detected_platform": None,
         "products_parsed": 0, "producer_hits": [],
-        "attempts": [{"url": "https://naturavin.example/shop",
+        "attempts": [{"url": "https://zzz.example/shop",
                       "outcome": "no connection to the host"}],
     }
     monkeypatch.setattr(probe, "probe_shop", lambda shop, client, **kw: failed)
     monkeypatch.setattr(probe.crawler, "Crawler", lambda *a, **k: StubCrawler({}))
-    monkeypatch.setattr(probe, "apply_results", lambda results: ([], ["naturavin"]))
+    monkeypatch.setattr(probe, "apply_results", lambda results: ([], ["zzz-probe"]))
 
-    probe.main(["--only", "naturavin", "--apply"])
+    probe.main(["--only", "zzz-probe", "--apply"])
 
     out = capsys.readouterr().out
     tail = out.split("Left unverified", 1)[1]
-    assert "naturavin" in tail
+    assert "zzz-probe" in tail
     assert "no connection to the host" in tail, \
         "the summary named the shop but not the reason"
 
@@ -535,11 +542,15 @@ def test_capturing_pages_does_not_cancel_the_probe(monkeypatch, tmp_path, capsys
                                               "detected_platform": None, "attempts": [],
                                               "products_parsed": 0, "producer_hits": []})
 
-    probe.main(["--capture", "https://zzz.example/page", "--only", "naturavin"])
+    monkeypatch.setattr(probe.scraper, "SHOPS", [
+        {"name": "zzz-probe", "platform": "html",
+         "url": "https://zzz.example", "verified": False}])
+
+    probe.main(["--capture", "https://zzz.example/page", "--only", "zzz-probe"])
 
     out = capsys.readouterr().out
     assert "CAPTURE" in out
-    assert "naturavin" in out, "the shop named in --only was never probed"
+    assert "zzz-probe" in out, "the shop named in --only was never probed"
 
 
 def test_diagnostics_never_land_in_the_repo_during_tests():
