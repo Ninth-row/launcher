@@ -33,6 +33,20 @@ DRY_RUN = os.environ.get("DRY_RUN") == "1"
 # somebody pressed a button for has to answer, or the button looks broken.
 FORCE_REPORT = os.environ.get("FORCE_REPORT") == "1"
 
+# A hot pass: read only the pages where a release shows up first, and read
+# them fresh. The full pass is ~410 requests and 11-32 minutes against a 450
+# budget, so it cannot run often enough to win a race for an allocated
+# bottle -- and every catalogue page it reads is served from a 6h cache, so
+# even a run that fires can read a page that predates the release. A hot pass
+# is ~24 requests and under two minutes, which can.
+#
+# It is deliberately not a smaller version of the full run. It reads one
+# surface per shop, so almost every conclusion main() draws from a complete
+# crawl is unavailable to it, and saying any of them anyway would be a lie
+# told hourly: see the HOT guards below, each of which turns off a note or a
+# file whose validity depends on having read every shop to the end.
+HOT = os.environ.get("HOT") == "1"
+
 # Politeness is the cost of this crawl: 3s plus jitter per host, per request.
 # Reading all 23 shops to the end of their catalogues is 311 requests, ~28
 # minutes cold. A job killed at the runner's ceiling loses everything -- no
@@ -652,6 +666,14 @@ SHOPS = [
         # (six colour filters where the menu linked all six at once), and the
         # probe records paths that merely parsed, so it cannot spot the union.
         "catalog_path": "fr/26-les-vins",
+        # The same probe run that chose les-vins read this strip too: 106
+        # products over 9 pages. It is not the catalogue -- les-vins states
+        # 339 and holds the regions -- but it is the page this shop puts a
+        # release on first, and it was going unread between full passes.
+        # Hand-set, as the other three are: probe.py --apply owns
+        # catalog_path/catalog_paths and never writes this key, so it
+        # survives a re-probe.
+        "new_arrivals": "fr/nouveaux-produits",
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
@@ -953,7 +975,8 @@ def parse_price(text):
     return positive_price(float(raw))
 
 
-def _paged(shop, crawler_client, url, params_for_page, page_size, extract):
+def _paged(shop, crawler_client, url, params_for_page, page_size, extract,
+           max_age=None):
     """Walk a paged catalogue until it's exhausted, a short page arrives, or
     a limit is hit. Returns whatever was collected -- a partial catalogue is
     still real data, but truncation is logged loudly because it can turn a
@@ -961,7 +984,8 @@ def _paged(shop, crawler_client, url, params_for_page, page_size, extract):
     items, truncated, fetched = [], False, 0
     for page in range(1, MAX_PAGES_PER_SHOP + 1):
         try:
-            resp = crawler_client.get(url, params=params_for_page(page))
+            resp = crawler_client.get(url, params=params_for_page(page),
+                                      max_age=max_age)
             fetched += 1
             resp.raise_for_status()
         except crawler.BudgetExceeded:
@@ -1016,7 +1040,7 @@ def in_stock(explicit, text):
     return not autoselect.is_out_of_stock(text)
 
 
-def fetch_shopify(shop, crawler_client):
+def fetch_shopify(shop, crawler_client, max_age=None):
     base = shop["url"].rstrip("/")
 
     def parse_page(payload):
@@ -1043,6 +1067,17 @@ def fetch_shopify(shop, crawler_client):
                 "url": f"{base}/products/{product.get('handle', '')}",
                 "variant_title": variant_title,
                 "in_stock": in_stock(stated, f"{title} {variant_title}"),
+                # The shop states when it put this on the shelf, in a payload
+                # we were already fetching and already throwing away. For an
+                # allocated grower that is the whole decision: a bottle listed
+                # four minutes ago and one listed last month were rendered
+                # byte-identically. `published_at` is when it went on sale and
+                # `created_at` when the record was made, so the first is the
+                # answer and the second only a fallback. No HTML shop states
+                # anything comparable, so this is absent there rather than
+                # guessed -- see notify._listed_age.
+                "listed_at": (product.get("published_at")
+                              or product.get("created_at")),
             })
         return parsed
 
@@ -1052,6 +1087,7 @@ def fetch_shopify(shop, crawler_client):
         lambda page: {"limit": SHOPIFY_PAGE_SIZE, "page": page},
         SHOPIFY_PAGE_SIZE,
         parse_page,
+        max_age=max_age,
     )
 
 
@@ -1483,6 +1519,48 @@ def fetch_html(shop, crawler_client):
     # size, so each is walked to the end of itself.
     pages_read = 0
 
+    # The newest listings, fetched before the catalogue and merged after it.
+    #
+    # A configured catalogue can be a *subset* of a shop's range and say
+    # nothing about it: winenot's is the union of six values of its own
+    # "Couleur / Type" facet, and a pack of six bottles carries no colour, so
+    # every pack it sells is outside the 1215 products that catalogue states.
+    # PACK LABET LA REINE and PACK OVERNOY SAVAGNIN 2018 were both in stock,
+    # both matched their producer, and neither was ever fetched.
+    #
+    # Fetched *first* because it was fetched last, and so was the first thing
+    # the request budget and the run clock took away -- which is precisely
+    # backwards. A catalogue cut short is a TRUNCATED row that says so; a
+    # strip never read is a bottle nobody hears about, on the one page where
+    # an allocated bottle appears first. The strip is three pages at most
+    # (NEW_ARRIVALS_PAGES) and read at FRESH_PAGE_TTL_SECONDS rather than the
+    # 6h catalogue TTL, so putting it first costs the catalogue almost
+    # nothing and can no longer be starved by it.
+    #
+    # It is still added *beside* the catalogue, never instead of it -- the
+    # probe choosing a strip over a catalogue is a separate documented
+    # failure, and a strip rotates, so anything that ages off it must still
+    # be found the usual way.
+    #
+    # Said out loud on every outcome, including the boring ones. The first
+    # live run of this read winenot's strip, added nothing, and printed not
+    # one line about it -- so "the path is wrong", "the page is unreadable"
+    # and "the catalogue really does hold everything" were indistinguishable
+    # from the log, which is the exact silence this project exists to remove.
+    new_items, new_how, new_url, new_read = [], None, None, False
+    new_path = shop.get("new_arrivals")
+    if new_path:
+        new_url = _shop_url(shop, new_path)
+        try:
+            _, _, new_items, _, new_how, _ = _walk_pages(
+                shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
+                max_age=crawler.FRESH_PAGE_TTL_SECONDS)
+        except (crawler.FetchError, EmptyResponseError) as e:
+            print(f"[{shop['name']}] new arrivals {new_url} could not be read "
+                  f"({type(e).__name__}: {e}); the catalogue alone was used")
+        else:
+            new_read = True
+
     # One dead category must not black out a shop. A configured catalog_paths
     # list is a set of categories, and a category gets renamed or retired on
     # its own schedule -- _walk_pages raises when *page one* fails, which is
@@ -1560,48 +1638,21 @@ def fetch_html(shop, crawler_client):
                 print(f"[{shop['name']}] producer index added {added} "
                       f"listing(s) the catalogue did not have")
 
-    # The newest listings, read on purpose rather than hoped for.
+    # The strip was fetched at the top of this function; merge it now.
     #
-    # A configured catalogue can be a *subset* of a shop's range and say
-    # nothing about it: winenot's is the union of six values of its own
-    # "Couleur / Type" facet, and a pack of six bottles carries no colour, so
-    # every pack it sells is outside the 1215 products that catalogue states.
-    # PACK LABET LA REINE and PACK OVERNOY SAVAGNIN 2018 were both in stock,
-    # both matched their producer, and neither was ever fetched. Reading the
-    # strip costs a page or two and is where an allocated bottle appears
-    # first, which is the whole point of running this hourly.
-    #
-    # Added *beside* the catalogue, never instead of it -- the probe choosing
-    # a strip over a catalogue is a separate documented failure, and a strip
-    # rotates, so anything that ages off it must still be found the usual way.
-    # The count of listings it adds that the catalogue did not have is the
-    # alarm: a healthy shop reads 0, and anything else says the catalogue is
-    # not the whole shop.
-    #
-    # Said out loud on every outcome, including the boring ones. The first
-    # live run of this read winenot's strip, added nothing, and printed not
-    # one line about it -- so "the path is wrong", "the page is unreadable"
-    # and "the catalogue really does hold everything" were indistinguishable
-    # from the log, which is the exact silence this project exists to remove.
-    # The number is only news when it is not zero; that it was *measured* is
-    # news every time.
+    # Merged last although it was fetched first, because `off_catalogue` is
+    # "listings the catalogue does not carry" and that number only means what
+    # it says once the catalogue -- and the producer index above -- are
+    # already in `items`. The count is the alarm: a healthy shop reads 0, and
+    # anything else says the catalogue is not the whole shop. It is only news
+    # when it is not zero; that it was *measured* is news every time.
     off_catalogue = 0
-    new_path = shop.get("new_arrivals")
-    if new_path:
-        new_url = _shop_url(shop, new_path)
-        try:
-            _, _, new_items, _, new_how, _ = _walk_pages(
-                shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
-                max_age=crawler.FRESH_PAGE_TTL_SECONDS)
-        except (crawler.FetchError, EmptyResponseError) as e:
-            print(f"[{shop['name']}] new arrivals {new_url} could not be read "
-                  f"({type(e).__name__}: {e}); the catalogue alone was used")
-        else:
-            items, how, off_catalogue = _add_unseen(
-                items, new_items, how, new_how)
-            print(f"[{shop['name']}] new arrivals {new_url}: read "
-                  f"{len(new_items)} listing(s), {off_catalogue} not in the "
-                  f"catalogue")
+    if new_read:
+        items, how, off_catalogue = _add_unseen(
+            items, new_items, how, new_how)
+        print(f"[{shop['name']}] new arrivals {new_url}: read "
+              f"{len(new_items)} listing(s), {off_catalogue} not in the "
+              f"catalogue")
 
     if items and how == "auto":
         print(f"[{shop['name']}] no configured selector matched; "
@@ -1674,6 +1725,44 @@ FETCHERS = {
     "woocommerce": fetch_woocommerce,
     "html": fetch_html,
 }
+
+
+def hot_surface(shop):
+    """Has this shop a page where a release shows up first?
+
+    Shopify states `published_at` per product in /products.json, so its whole
+    catalogue doubles as a recency feed and costs a request or two at 250
+    products a page. An HTML shop has such a page only if a `new_arrivals`
+    path is configured -- and that path is probe-recorded, never guessed.
+
+    A shop with neither is not read on a hot pass *at all*, rather than read
+    badly: a catalogue walk is what the full pass is for, and doing a partial
+    one hourly would spend the politeness budget of every shop on the list to
+    learn nothing the full pass will not learn properly.
+    """
+    if shop["platform"] == "shopify":
+        return True
+    return bool(shop.get("new_arrivals"))
+
+
+def fetch_hot(shop, crawler_client):
+    """Only the surface a release appears on, read fresh.
+
+    Shopify's /products.json is read in full rather than page one alone. Its
+    page ordering is not documented as newest-first, and assuming it would
+    quietly drop a release onto a page nobody asked for -- at 250 products a
+    page these shops cost one or two requests, so there is nothing to buy by
+    guessing. Recency then comes from `published_at`, which is a fact the
+    payload states rather than an order we inferred.
+    """
+    if shop["platform"] == "shopify":
+        return fetch_shopify(shop, crawler_client,
+                             max_age=crawler.FRESH_PAGE_TTL_SECONDS)
+    new_url = _shop_url(shop, shop["new_arrivals"])
+    fetched, truncated, items, _, _, _ = _walk_pages(
+        shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
+        max_age=crawler.FRESH_PAGE_TTL_SECONDS)
+    return ParsedItems(items, truncated=truncated, pages_read=fetched)
 
 
 class ParsedItems(list):
@@ -1765,8 +1854,16 @@ def shop_order(shops, now=None):
     return list(shops[offset:]) + list(shops[:offset])
 
 
-def check_shop(shop, crawler_client):
-    items = FETCHERS[shop["platform"]](shop, crawler_client)
+def check_shop(shop, crawler_client, fetch=None):
+    """Match every parsed listing on a shop against the watchlist.
+
+    `fetch` overrides the platform fetcher, which is how a hot pass reads one
+    surface instead of a catalogue while everything downstream of the fetch --
+    alias matching, the sold-out split, near-miss tokens -- stays exactly the
+    same code. A hot find must reach the digest by the route a normal find
+    takes, or it is a second pipeline to keep honest.
+    """
+    items = (fetch or FETCHERS[shop["platform"]])(shop, crawler_client)
     hits = []
     sold_out = []
     near_tokens = set()
@@ -1791,6 +1888,8 @@ def check_shop(shop, crawler_client):
                 "url": item["url"],
                 "variant_title": item.get("variant_title", ""),
                 "matched_alias": alias,
+                # None for every platform that states no publication time.
+                "listed_at": item.get("listed_at"),
             }
             (sold_out if out_of_stock else hits).append(row)
     if skipped:
@@ -1822,6 +1921,12 @@ def main():
     verified_names = [s["name"] for s in SHOPS if s.get("verified", True)]
     # Rotated so a binding budget does not starve the same tail every hour.
     order = shop_order(SHOPS)
+    if HOT:
+        # Only the shops with a surface worth reading fresh. The rest are not
+        # read badly, they are not read: see hot_surface().
+        order = [s for s in order if hot_surface(s)]
+        print(f"Hot pass: {len(order)} shop(s) with a recency surface, read "
+              f"at a {crawler.FRESH_PAGE_TTL_SECONDS:.0f}s cache TTL.")
 
     started = time.monotonic()
     def absorb(shop, hits):
@@ -1845,10 +1950,15 @@ def main():
             off_catalogue_shops.append(
                 f"{shop['name']}: {hits.off_catalogue} listing(s) on new "
                 f"arrivals that the catalogue does not carry")
-        if hits.products_parsed == 0:
+        if hits.products_parsed == 0 and not HOT:
             # Its fixture parses to more than zero, so the adapter has stopped
             # reading this shop. Until now this printed the same line as a
             # shop with nothing we watch in stock.
+            #
+            # Not on a hot pass: it reads a new-arrivals strip, and a strip
+            # with nothing on it today is the normal state of a shop that has
+            # released nothing. Calling that adapter drift would cry wolf
+            # every hour until nobody reads the word DRIFT at all.
             silent_shops.append(shop["name"])
 
     for i, shop in enumerate(order):
@@ -1876,7 +1986,8 @@ def main():
             break
 
         try:
-            hits = check_shop(shop, crawler_client)
+            hits = check_shop(shop, crawler_client,
+                              fetch=fetch_hot if HOT else None)
             coverage.append(coverage_row(shop, hits))
             absorb(shop, hits)
             print(f"[{shop['name']}] ok, {len(hits)} hit(s) from "
@@ -1944,7 +2055,8 @@ def main():
                 continue
             crawler_client.reopen(shop["url"])
             try:
-                hits = check_shop(shop, crawler_client)
+                hits = check_shop(shop, crawler_client,
+                                  fetch=fetch_hot if HOT else None)
             except Exception as e:
                 print(f"[{shop['name']}] retry failed too: {e}")
                 continue
@@ -1969,11 +2081,16 @@ def main():
     for line in table:
         print(line)
     print()
-    if not DRY_RUN:
+    # Not written by a hot pass: it would replace a 17-row table describing
+    # every shop's whole catalogue with a handful of rows describing one page
+    # each, and coverage.json exists to answer "does what we read match what
+    # the shop actually sells". A hot pass cannot answer that and must not
+    # appear to.
+    if not DRY_RUN and not HOT:
         COVERAGE_PATH.write_text(json.dumps(coverage, indent=2, sort_keys=True))
 
     print(f"{len(all_hits)} raw producer match(es) this run.")
-    if silent_shops:
+    if silent_shops and not HOT:
         print(f"DRIFT: {len(silent_shops)} verified shop(s) parsed no products at "
               f"all: {', '.join(silent_shops)}. Their fixtures parse fine, so the "
               f"adapter has stopped reading them.")
@@ -1996,12 +2113,18 @@ def main():
     unseen_title = ("Watched but found nowhere" if not unreached else
                     f"Watched but found nowhere in the "
                     f"{len(coverage) - len(unreached)} shop(s) read")
-    if sold_out_only:
+    # A hot pass has no grounds for any of the three. "Found nowhere" means an
+    # alias that matches nothing, and it can only mean that when every shop
+    # was read to the end; near-misses are drawn from the same corpus; and a
+    # producer absent from a new-arrivals strip is a producer who released
+    # nothing today, not one who is sold out everywhere. Printed hourly off
+    # one page each, they would accuse the watchlist every hour.
+    if sold_out_only and not HOT:
         print(f"Matched but sold out everywhere ({len(sold_out_only)}): "
               f"{', '.join(sold_out_only)}")
-    if unseen:
+    if unseen and not HOT:
         print(f"{unseen_title} ({len(unseen)}): {', '.join(unseen)}")
-    misses = near_misses(unseen, near_corpus)
+    misses = [] if HOT else near_misses(unseen, near_corpus)
     if misses:
         print(f"Alias near-misses ({len(misses)}): {'; '.join(misses)}")
     if error_count:
@@ -2048,7 +2171,13 @@ def main():
     evaluated = evaluate.evaluate_hits(all_hits, pricebook, store, aliases)
 
     # A dry run must leave no trace, exactly as it leaves seen.json alone.
-    if not DRY_RUN:
+    #
+    # Nor does a hot pass. The pool is reference data and a new-arrivals strip
+    # is a biased slice of a shop; a brand-new bottle's reference comes from
+    # *other* shops anyway, so recording our own hot observation cannot help
+    # classify it. Keeping the pool out of the hot path also keeps one more
+    # file out of the actions/cache race between the two workflows.
+    if not DRY_RUN and not HOT:
         market.save_observations(store)
 
     # Which shops we actually read, so a bottle missing from a shop we never
@@ -2065,6 +2194,46 @@ def main():
         f"{h.get('producer')}: {(h.get('cuvee') or h.get('title') or '')[:60]}"
         for h in evaluated
         if h.get("line_basis") == "default for this producer"})
+
+    if HOT:
+        # A hot pass alerts on one thing: a product URL never recorded before.
+        #
+        # That filter is the safety mechanism as much as the policy.
+        # notify._update_state stamps `last_seen_at` for every in-stock hit,
+        # alerted or not, and _came_back refuses to call a bottle "back" when
+        # that stamp is newer than ABSENT_DAYS. So a hot pass that merely
+        # *looked at* a bottle it already knew would restamp its presence and
+        # silently destroy the restock alert -- which CLAUDE.md calls the most
+        # valuable alert this scraper sends, and which is the normal case for
+        # a grower allocated in a few dozen bottles. Handing notify only
+        # never-seen hits means nothing known is ever passed in, so nothing
+        # known can be restamped. Drops, restocks and reclassifications stay
+        # with the full pass, which has the whole catalogue to judge them on.
+        #
+        # Every note below describes a property of a complete crawl, so a hot
+        # pass carries none of them.
+        state = notify.load_state()
+        fresh = [h for h in evaluated if notify.item_key(h) not in state]
+        print(f"Hot pass: {len(fresh)} never-seen listing(s) of "
+              f"{len(evaluated)} matched.")
+        write_step_summary(table, {}, evaluated)
+        if not fresh and not FORCE_REPORT:
+            # No email, and so no state write and no recap. The weekly recap
+            # is the full pass's promise that the pipeline is alive; a hot
+            # pass must not reset its clock or send it.
+            #
+            # FORCE_REPORT is the documented exception: a run a human pressed
+            # a button for always answers, because silence from a run you
+            # asked for reads as a dead scraper. It reports the empty table
+            # and marks nothing as alerted, exactly as it does on a full pass.
+            print("Hot pass: nothing newly listed -- silent run is valid.")
+            return
+        # shops_read is empty on purpose. It is what stamps _meta.shops, the
+        # "were we actually looking" guard behind _came_back, and reading a
+        # new-arrivals strip is not reading this shop.
+        notify.run_digest(fresh, dry_run=DRY_RUN, force=FORCE_REPORT,
+                          shops_read=(), tables=None, notes=None)
+        return
 
     notes = {
         "Shops that returned nothing": silent_shops,

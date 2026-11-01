@@ -30,7 +30,7 @@ def pipeline(monkeypatch, tmp_path):
     monkeypatch.setattr(notify, "send_email", fake_send)
 
     def run(bodies, dry_run=False, force=False, max_run_seconds=0,
-            max_pages=None, **crawler_kwargs):
+            max_pages=None, hot=False, **crawler_kwargs):
         # Everything the double itself understands -- max_requests and the
         # fault-injection hosts -- is forwarded verbatim rather than relisted
         # here with its default written out a second time. The next failure
@@ -41,6 +41,7 @@ def pipeline(monkeypatch, tmp_path):
         monkeypatch.setattr(scraper, "DRY_RUN", dry_run)
         monkeypatch.setattr(scraper, "FORCE_REPORT", force)
         monkeypatch.setattr(scraper, "MAX_RUN_SECONDS", max_run_seconds)
+        monkeypatch.setattr(scraper, "HOT", hot)
         if max_pages is not None:
             monkeypatch.setattr(scraper, "MAX_PAGES_PER_SHOP", max_pages)
         scraper.main()
