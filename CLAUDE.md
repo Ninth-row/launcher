@@ -188,9 +188,12 @@ the thing built for speed buried in the Actions tab. The token that authorises t
 instead.
 
 Runs every two hours from `.github/workflows/scraper.yml`, which runs the fixture
-tests first, best-effort persists `seen.json`/`observations.json`/`.cache`
-across runs via `actions/cache`, and uploads `hits.json` plus
-`observations.json` as artifacts.
+tests first, best-effort persists state across runs via **two** `actions/cache`
+entries -- `wine-scraper-state-` for `seen.json`, `observations.json` and
+`watchlist.json`, `wine-scraper-httpcache-` for `.cache` -- and uploads
+`hits.json` plus `observations.json` as artifacts. The split is load-bearing
+and is documented in its own rule below: under one key the 6.5 MB of fetched
+pages evict the few hundred KB that decide what has already been alerted.
 
 Any digest or recap also carries what the run could not do quietly:
 shops that returned nothing, producers **matched but sold out everywhere**
@@ -206,7 +209,9 @@ shops added from research/guesswork rather than a real observed response
 --apply`, which fetches, parses and flags in a single run against a real
 response; never by hand.
 
-17 shops are currently verified and fetched on every run. Two shops since
+18 shops are currently verified and fetched on every run -- oenovinia was
+added through the issue form as #27 and verified by probe run
+41322696399. Two shops since
 removed, vinovivo and purovino, spent months listed here as "prices are
 rendered client-side" — and that verdict was wrong twice over. The price *was* in
 their HTML; `autoselect._price_nodes` could not see it, because it accepted a
@@ -232,19 +237,42 @@ ignoring the Overnoy-Crinquand two lines up --
 `tests/fixtures/purewijnen-growers-excerpt.html` keeps that real markup as a
 namesake test -- but the link leads to prose.)
 
-Four remain unverified. Three have a tested reason; the fourth has not been
-probed yet:
+Four remain unverified, and all four now have a tested reason:
   - **weinfurore** was added through the issue form on 2026-11-01 (issue #25)
-    and has never been probed, so its platform and selectors are the form's
-    placeholders and its fixture is a placeholder too. It is the one entry
-    here with no measured reason -- run the probe before reading anything
-    into it;
-  - **feralart** is Wix, and the probe on 2026-11-01 got HTTP 400 and 404
-    across its candidate paths and "responded and parsed, but zero products
-    found" on the four that answered -- including `/champagne`,
-    `/champagne-casanova` and `/auction-wines`, whose captures are in
-    `probe_pages/`. Wix with no readable grid is the wineshopbiarritz shape,
-    so the question worth asking next is whether it publishes a document;
+    and probed the same day: **HTTP 403, three times, then the circuit
+    breaker** (run 41308647379). That is a refusal, and it is answered the way
+    every refusal here is -- by not going there. Nothing tries to get past it,
+    and in particular the User-Agent is not dressed up as a browser to see
+    whether that helps. The loss is real and worth recording so nobody has to
+    rediscover it: the shop is Shopware, prices sit in its HTML with
+    schema.org `price`/`priceCurrency` metadata, and it carries a deep Ganevat
+    range -- a grower page at `/domaine-ganevat-jura-france` listing both the
+    domaine and the Anne-et-Jean-Francois negoce line, Chateau-Chalon 2016,
+    and a Vin Jaune 2012 at **0,62 l**, the clavelin the band logic exists
+    for. Its platform and selectors are still the issue form's placeholders,
+    because only a real response may correct them. As naturavin proved, a
+    documented 403 is a fact with a date on it rather than a permanent
+    property, so this is worth re-probing occasionally -- but it is not worth
+    working around;
+  - **feralart** is Wix, and "responded and parsed, but zero products found"
+    was wrong about it in the way vinovivo and demainlesvins were wrong.
+    `probe_pages/feralart.www-feralartetvin-com.shop.html` holds 40 currency
+    markers and 25 `/product-page/` links, and a JSON island stating **12
+    products with numeric prices, EUR, `isInStock` and a slug each** -- beside
+    `"totalCount":923`. Wix renders its grid in the browser from that island,
+    so there is no repeated priced structure for `autoselect` to climb.
+    `_fetch_via_wix_island` reads it and walks it: twelve records is **1.3% of
+    923**, none of the twelve is a producer we watch, and a reader that
+    stopped there would have printed a clean coverage row over a shop it had
+    barely opened. How far to walk comes from the total the island states --
+    77 pages at twelve a page, confirmed against the shop's own
+    `/shop?page=2`, which serves twelve different wines and titles itself
+    "2/77". That `totalCount` sits beside an `allProductsCategoryId`, which
+    settles what looked like a `catalog_paths` question: `/shop` **is** the
+    union, and `/things`, `/champagne` and `/auction-wines` are its category
+    filters, so configuring them would read slices of a whole already in hand.
+    It stocks Tom Gauditiabois. It is still unverified only because `probe.py
+    --apply` is the one thing that may verify a shop -- run it;
   - **cuvee3000** answers every path — `/`, `/en`, `/en/wines`, `/fr`, and
     `/vins.php`, which cannot exist — with the same ~1.3KB of title,
     `<noscript>` and one `<script>`: no anchor, no meta-refresh, and a body
@@ -924,6 +952,87 @@ HTTP header or printed.
   also needs `.gitignore`: the suite writes through these paths, and one went
   into the repo full of `zzz-shopify` rows before `conftest.py` redirected
   `WATCHLIST_PATH` to `tmp_path` like the other four.
+- "No grid" is not "no data". A Wix Stores page serves the product *links*
+  and renders the grid in the browser from a JSON island, so `autoselect` --
+  which finds a card by its price -- sees nothing and the probe reports
+  "responded and parsed, but zero products found". feralart read that way on
+  every path while its `/shop` page held 40 currency markers, 25
+  `/product-page/` links and an island stating 12 products. `wix_products`
+  finds `"productsWithMetaData":{"list":` and matches brackets to the end of
+  the array -- not a regex, because descriptions contain brackets and escaped
+  quotes -- and `_fetch_via_wix_island` reads it from the page already in
+  hand, costing no request. It is a *better* source than a grid: `price` is
+  numeric, `currency` is named, and `isInStock` is a flag rather than a French
+  word to infer from. This is the demainlesvins `data-product` lesson in a
+  different costume, and it is tried before the document reader because it is
+  free.
+  **Only the `name` field reaches the matcher.** feralart sells books and
+  candles whose blurbs name growers: its real "A Vif - Terroirs en Feu"
+  publication describes itself as "covering Julie Balagny, L'Arbe Blanc,
+  **Labet**, Aurelien Lefort…", and `matched_aliases` returns Labet for that
+  sentence. Matching descriptions would file a book as a bottle of Labet at
+  the book's price -- a blog post about Overnoy is not a bottle of Overnoy,
+  and neither is a book about Labet. `comparePrice` is never read either: Wix
+  puts the struck-through figure there and `price` is the one you would pay.
+  `tests/fixtures/feralart-wix-island-excerpt.html` keeps three of the shop's
+  twelve records verbatim.
+  **An island is one page of a catalogue, and reading it is not reading the
+  shop.** feralart's states `"totalCount":923` next to the twelve records it
+  lists, so the first version of this reader took 1.3% of a shop and reported
+  a clean coverage row -- "catalogues are paged" in a new costume, and the
+  worse kind, because none of the twelve is a producer we watch and the row
+  would have said `ok` for ever. How far to walk is derived from the total the
+  island states, exactly as `autoselect.catalogue_size` derives it, and never
+  from a pager link: Wix renders its pager in the browser too, so
+  `find_next_page` finds nothing and a walk waiting for a `rel="next"` reads
+  page one and stops. `?page=N` is the shop's own parameter -- `/shop?page=2`
+  serves twelve different wines and titles itself "2/77". Three details are
+  load-bearing. The page size is the count of **records**, not of the items
+  the reader kept, or a skipped nameless record shortens every page and the
+  walk asks for pages that do not exist. `totalCount` is read only from the
+  metadata **immediately after** the record array, because a Wix page carries
+  other counted widgets and a review count read as the catalogue's size sets
+  the walk's length from a number about something else. And an island stating
+  no total reads the page in hand and **says so** rather than guessing at a
+  page two -- `None` is a real answer here as everywhere.
+  The exception ladder is the one `_walk_pages` documents, for the same
+  reasons: `UpstreamError` on a later page ends the catalogue without
+  truncating it (a platform 404ing the page past its last is the catalogue
+  ending, and folding that in marks such a shop permanently TRUNCATED),
+  everything else that stops the walk early *is* truncation and must say so,
+  and **nothing re-raises** -- the catalogue page is already in hand and
+  nothing a supplementary reader does may cost it.
+  A gallery that runs out *before* its stated total is the third case, and it
+  gets a number rather than a flag. Nothing stopped us, so the row is not
+  TRUNCATED -- but the shop's claim and what it served disagree, and either
+  the total counts products the gallery does not page through or a page
+  withheld its island and the reader stopped on a shop with more to give. The
+  second is this adapter's version of adapter drift, a product count cannot
+  tell it from the first, and neither is visible unless the run says it out
+  loud.
+- Generating the page is not publishing it, and the gap is silent.
+  `wine.html` is committed by `dashboard.yml`; GitHub **Pages** deploys it in
+  a separate run. When a Pages deployment wedges, every later one is refused
+  with "Deployment request failed ... due to in progress deployment" -- and
+  `dashboard.yml` goes on reporting success while the live page stays frozen.
+  On 2026-11-01 it stayed frozen across four rebuilds and two merges; the
+  owner pressed "Rebuild this page" repeatedly and the only symptom was a
+  button that would not appear, because the published copy was the build from
+  `5579c07`. `dashboard.yml`'s last step now reads the most recent `pages
+  build and deployment` conclusion and fails loudly on `failure`. It reads the
+  *previous* deployment, since this push's has not started -- which is the
+  right question anyway, because a wedge is a standing condition.
+- State lives in two caches, and the split is load-bearing. `seen.json`,
+  `observations.json` and `watchlist.json` are a few hundred KB; `.cache` is
+  ~6.5 MB of fetched pages. Cached under one key they are evicted under one
+  key -- and run 41290903522 restored nothing, so the pool arrived empty, the
+  POOL note fired, and every verdict that run rested on a single crawl.
+  Losing the HTTP cache costs requests and nothing else; losing `seen.json`
+  re-alerts every bottle and then silences each for 30 days, and **the hot
+  pass depends on it outright**, because it alerts on URLs *absent* from that
+  file -- with no state it would mail the whole shelf every hour. So
+  `wine-scraper-state-` holds the three small files and
+  `wine-scraper-httpcache-` holds `.cache`, in both workflows.
 - Being first is the point, and the cache TTL is the lever -- not the cron.
   A full pass is ~410 requests and 11-32 minutes against a 450 budget, so it
   cannot run often enough to win a race for a bottle that exists in dozens,
@@ -933,8 +1042,10 @@ HTTP header or printed.
   `FRESH_PAGE_TTL_SECONDS` instead: `hot_surface()` admits a Shopify shop
   (its `/products.json` doubles as a recency feed) or an HTML shop with a
   configured `new_arrivals` path, and `fetch_hot()` reads that and nothing
-  else -- about 24 requests and under two minutes, over 10 of the 17 verified
-  shops. The dashboard has a **Run hot pass** button beside the full one; the
+  else -- measured at 39 pages and 3m48s over the 10 shops that had a surface
+  (run 41305306786), most of it mareehaute's 16 pages, because `fetch_hot`
+  reads Shopify's `/products.json` in full rather than guessing at its order.
+  The dashboard has a **Run hot pass** button beside the full one; the
   dry-run checkbox applies to either. A shop with neither
   surface is **not read at all** rather than read badly; a partial catalogue
   walk hourly would spend every shop's politeness budget to learn nothing the
