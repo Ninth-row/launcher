@@ -685,6 +685,15 @@ SHOPS = [
         "price_selector": "span.price",
         "verified": False,
     },
+    {
+        "name": "weinfurore",
+        "platform": "html",
+        "url": "https://www.weinfurore.de",
+        "item_selector": "div.product",
+        "title_selector": "h2.product-title",
+        "price_selector": "span.price",
+        "verified": False,
+    },
 ]
 
 
