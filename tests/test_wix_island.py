@@ -378,3 +378,36 @@ def test_fetch_html_reports_the_island_walk_in_its_coverage_numbers():
     assert items.pages_read == 3
     assert items.pages_total == 3
     assert not items.truncated
+
+
+def test_a_gallery_that_ends_before_its_stated_total_says_so(capsys):
+    """Not truncation -- nothing stopped us -- but not silence either.
+
+    Either the total counts products the gallery does not page through, or a
+    page withheld its island and the reader stopped on a shop with more to
+    give. The second is the island's version of adapter drift, and a product
+    count alone cannot tell them apart.
+    """
+    pages = {1: _island([{"name": "Wine 1", "urlPart": "wine-1", "price": 20,
+                          "isInStock": True}], total=9),
+             2: _island([{"name": "Wine 2", "urlPart": "wine-2", "price": 21,
+                          "isInStock": True}], total=9)}
+    client = _PagedWix(pages)
+
+    items = scraper._fetch_via_wix_island(SHOP, pages[1], PAGE, client)
+
+    assert not items.truncated
+    assert len(items) == 2
+    out = capsys.readouterr().out
+    assert "gallery ended at page 2 of 9 stated" in out
+    assert "read 2 of 9" in out
+
+
+def test_a_gallery_read_to_its_stated_end_reports_no_gap(capsys):
+    pages = {n: _island([{"name": f"Wine {n}", "urlPart": f"wine-{n}",
+                          "price": 20, "isInStock": True}], total=3)
+             for n in range(1, 4)}
+
+    scraper._fetch_via_wix_island(SHOP, pages[1], PAGE, _PagedWix(pages))
+
+    assert "gallery ended" not in capsys.readouterr().out

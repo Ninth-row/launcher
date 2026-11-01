@@ -1002,6 +1002,14 @@ HTTP header or printed.
   everything else that stops the walk early *is* truncation and must say so,
   and **nothing re-raises** -- the catalogue page is already in hand and
   nothing a supplementary reader does may cost it.
+  A gallery that runs out *before* its stated total is the third case, and it
+  gets a number rather than a flag. Nothing stopped us, so the row is not
+  TRUNCATED -- but the shop's claim and what it served disagree, and either
+  the total counts products the gallery does not page through or a page
+  withheld its island and the reader stopped on a shop with more to give. The
+  second is this adapter's version of adapter drift, a product count cannot
+  tell it from the first, and neither is visible unless the run says it out
+  loud.
 - Generating the page is not publishing it, and the gap is silent.
   `wine.html` is committed by `dashboard.yml`; GitHub **Pages** deploys it in
   a separate run. When a Pages deployment wedges, every later one is refused

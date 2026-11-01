@@ -1994,6 +1994,11 @@ def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
 
     seen = {item["url"] for item in items}
     fetched = 0
+    # Whether the gallery ran out before the total said it would. That is not
+    # truncation -- nothing stopped us, we reached the end of what the shop
+    # serves -- but it is a gap between what the catalogue claims and what it
+    # hands over, and a gap nobody states is a gap nobody notices.
+    ended_at = None
     for page in range(2, last + 1):
         try:
             resp = crawler_client.get(page_url, params={WIX_PAGE_PARAM: page})
@@ -2008,6 +2013,7 @@ def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
             # selection useless.
             print(f"[{shop['name']}] Wix page {page} answered {e}; "
                   f"catalogue ends there")
+            ended_at = page - 1
             break
         except crawler.FetchError as e:
             # Everything else that stops a walk early *is* truncation and has
@@ -2028,12 +2034,24 @@ def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
             # rendered nothing. Either way there is nothing after it to read.
             print(f"[{shop['name']}] Wix page {page} states no products; "
                   f"catalogue ends there")
+            ended_at = page - 1
             break
         fresh = [item for item in _wix_items(page_records, page_url)
                  if item["url"] not in seen]
         seen.update(item["url"] for item in fresh)
         items.extend(fresh)
 
+    if ended_at is not None and ended_at < last:
+        # Said out loud because the alternative is silence over a real
+        # disagreement: either the total is stale -- Wix counts products the
+        # gallery does not paginate -- or a page withheld its island and this
+        # reader stopped on a shop that had more to give. Neither is visible
+        # from a product count alone, and the second one is the island
+        # equivalent of adapter drift.
+        print(f"[{shop['name']}] gallery ended at page {ended_at} of "
+              f"{pages_total} stated: read {len(items)} of {total}. Either "
+              f"the stated total counts products the gallery does not page "
+              f"through, or a page withheld its island")
     print(f"[{shop['name']}] read {len(items)} product(s) from the Wix "
           f"island over {fetched + 1} page(s)")
     return ParsedItems(items, truncated=truncated, pages_read=fetched,
