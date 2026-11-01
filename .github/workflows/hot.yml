@@ -1,0 +1,112 @@
+name: Wine Hot Pass
+
+on:
+  schedule:
+    # Hourly, which is as often as it is worth *asking* for. GitHub delivers
+    # roughly 8-10 of 24 requested runs on a public repo (see scraper.yml for
+    # the measured firing times), and CLAUDE.md's rule is that asking for runs
+    # you will not get only adds queue pressure.
+    #
+    # The frequency is not where most of the gain is anyway. A full pass reads
+    # every catalogue page through the crawler's 6h cache, so even a run that
+    # fires can read a page that predates the release; this pass reads its one
+    # page per shop at FRESH_PAGE_TTL_SECONDS (30 minutes) instead. The TTL is
+    # the lever, the cron is the multiplier.
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the digest instead of emailing it (sends nothing, changes no state)"
+        type: boolean
+        default: false
+
+# Deliberately the *same* group as the full pass, not a group of its own.
+# Both workflows restore and save the same actions/cache entry holding
+# seen.json, so two of them running at once would race on the file that
+# decides what has already been alerted -- and the loser's writes vanish.
+# Queueing behind a 30-minute full pass costs this run its slot; a lost state
+# write costs a real find, so the trade is not close.
+concurrency:
+  group: wine-scraper
+  cancel-in-progress: false
+
+# Read-only, and no credential left in the checkout: this job feeds
+# third-party HTML and JSON through bs4 and pushes nothing, so a parser bug
+# must not come with a token that can write to main.
+permissions:
+  contents: read
+
+jobs:
+  hot:
+    runs-on: ubuntu-latest
+    # The pass itself is ~24 requests and under two minutes; this is only the
+    # outer backstop, and MAX_RUN_SECONDS below stops the crawl well first.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Same rule as the full pass: the test step is what stands between a bad
+      # edit and a live crawl of every shop on the list. It costs about 25
+      # seconds and this job runs hourly, which is a price worth paying.
+      - name: Run fixture tests
+        run: pytest tests/ -q
+
+      # The same cache entry the full pass uses, because seen.json is the
+      # whole point: a hot pass must know what has already been alerted, and
+      # what it alerts must be known to the next full pass.
+      #
+      # The path list must stay identical to scraper.yml's even for the files
+      # a hot pass never touches. actions/cache saves only the paths it is
+      # given, and the full pass restores the most recent matching entry --
+      # which is usually one of these. Leaving watchlist.json or
+      # observations.json out here would quietly drop them from every hot
+      # run's entry, so the next full pass would restore a state missing them
+      # and rebuild from nothing.
+      - name: Restore scraper state cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            seen.json
+            observations.json
+            watchlist.json
+            .cache
+          key: wine-scraper-state-${{ github.run_id }}
+          restore-keys: |
+            wine-scraper-state-
+
+      - name: Run hot pass
+        env:
+          GMAIL_SENDER: ${{ secrets.GMAIL_SENDER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          HOT: "1"
+          # A hard ceiling well above the ~24 requests this pass should cost,
+          # so a bug that sent it down a catalogue cannot spend the shops'
+          # politeness budget before anyone notices.
+          MAX_REQUESTS_PER_RUN: "80"
+          MAX_RUN_SECONDS: "600"
+          DRY_RUN: ${{ (inputs.dry_run && '1') || '' }}
+          # A hand-started run always answers, even with nothing new -- that
+          # empty table is the only way to tell "nothing was listed" from
+          # "the credentials expired" from a button.
+          FORCE_REPORT: ${{ (github.event_name == 'workflow_dispatch' && '1') || '' }}
+        run: python scraper.py
+
+      - name: Upload hits.json artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # No coverage.json: a hot pass does not write one, because a row per
+          # shop describing one page is not a coverage table.
+          name: hot-hits-${{ github.run_id }}
+          path: hits.json
+          retention-days: 30

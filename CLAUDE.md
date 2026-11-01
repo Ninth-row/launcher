@@ -858,6 +858,118 @@ HTTP header or printed.
   otherwise it is logged, the row is marked TRUNCATED, and the rest are read.
   `catalogue_starts` pins the measured-best catalogue first, so this degrades
   in the right order.
+- The bottles we have found are remembered by URL, because nothing else
+  remembered them. `observations.json` keeps `(producer, seg, shop)` and no
+  URL at all, `seen.json` keeps only a `sha256(shop|url|variant)`, and
+  `hits.json` is not carried between runs -- so when a shop's walk was cut
+  short, the few dozen URLs we actually care about went unchecked and nothing
+  said so. `watchlist.json` (gitignored, carried by `actions/cache`, pruned on
+  the same 180-day window `market.merge` uses) is written from the **full
+  pass only**: a hot pass reads one surface per shop, so the URLs it did not
+  see are not absent -- they were never looked for, and pruning on that basis
+  would forget the whole list.
+  `recheck_watchlist` re-reads them through `detail_price`, the same
+  product-page reader `_price_from_detail_pages` uses, and only for a shop
+  whose coverage row says `TRUNCATED`: a shop that refused us, was blocked or
+  was never reached is not somewhere to spend what little is left, which is
+  the trade the retry pass already makes. The coverage row is left alone
+  because it describes the catalogue walk and this is not one; what the
+  re-read found gets its own digest note. Two things are load-bearing: the
+  producer is **re-derived** from the stored title by `matched_aliases` rather
+  than trusted from the entry, because a remembered attribution would outlive
+  an alias being corrected -- the exact bug `NAMESAKES` exists to prevent --
+  and a re-read that finds `quantity: 0` goes to `sold_out`, never to hits, so
+  it stays out of `seen.json` and its restock still reads as new.
+- Every state file must be in **both** workflows' `actions/cache` path list,
+  even the ones that workflow never touches. `actions/cache` saves only the
+  paths it is given and the full pass restores the most recent matching
+  entry -- which is usually a hot run's. Leaving `watchlist.json` out of
+  `hot.yml` would quietly drop it from every hot entry, so the next full pass
+  would restore a state without it and rebuild from nothing. A new state file
+  also needs `.gitignore`: the suite writes through these paths, and one went
+  into the repo full of `zzz-shopify` rows before `conftest.py` redirected
+  `WATCHLIST_PATH` to `tmp_path` like the other four.
+- Being first is the point, and the cache TTL is the lever -- not the cron.
+  A full pass is ~410 requests and 11-32 minutes against a 450 budget, so it
+  cannot run often enough to win a race for a bottle that exists in dozens,
+  and every catalogue page it reads is served from the 6h disk cache, so even
+  a run that fires can read a page that predates the release. `HOT=1`
+  (`.github/workflows/hot.yml`, hourly) reads one surface per shop at
+  `FRESH_PAGE_TTL_SECONDS` instead: `hot_surface()` admits a Shopify shop
+  (its `/products.json` doubles as a recency feed) or an HTML shop with a
+  configured `new_arrivals` path, and `fetch_hot()` reads that and nothing
+  else -- about 24 requests and under two minutes. A shop with neither
+  surface is **not read at all** rather than read badly; a partial catalogue
+  walk hourly would spend every shop's politeness budget to learn nothing the
+  full pass will not learn properly. It goes through `check_shop(fetch=...)`,
+  so alias matching, the sold-out split and near-miss tokens are the same
+  code: a hot find reaches the digest by the route a normal find takes.
+- **A hot pass alerts only on a product URL never recorded before, and that
+  filter is a safety mechanism before it is a policy.** `_update_state`
+  stamps `last_seen_at` for *every* in-stock hit, alerted or not, and
+  `_came_back` refuses to call a bottle "back" when that stamp is newer than
+  `ABSENT_DAYS`. So a hot pass that merely *looked at* a bottle it already
+  knew would restamp its presence and silently destroy the restock alert --
+  the one this file calls the most valuable alert the scraper sends, and the
+  normal case for a grower allocated in a few dozen bottles. Handing
+  `notify.run_digest` only hits whose `item_key` is absent from `seen.json`
+  means nothing known is ever passed in, so nothing known can be restamped.
+  Drops, restocks and reclassifications stay with the full pass, which has a
+  whole catalogue to judge them on. It also passes `shops_read=()`: that
+  argument is what stamps `_meta.shops`, the "were we actually looking" guard
+  behind `_came_back`, and reading a strip is not reading the shop.
+- A hot pass must not say anything that only a complete crawl can know. It
+  writes no `coverage.json` (a row per shop describing one page is not a
+  coverage table), no `observations.json` (the pool is reference data and a
+  strip is a biased slice; a new bottle's reference comes from *other* shops
+  anyway), no `DRIFT` line (a strip with nothing on it is a shop that
+  released nothing today), no "watched but found nowhere", no "sold out
+  everywhere" and no alias near-misses. Each of those printed hourly off one
+  page would be an accusation every hour, and a word that cries wolf stops
+  being read. The one thing it keeps is `FORCE_REPORT`: a run a human pressed
+  a button for still answers with an empty table, because silence from a run
+  you asked for reads as a dead scraper.
+- Both workflows share one `actions/cache` entry, so they share one
+  `concurrency` group. `hot.yml` deliberately uses `group: wine-scraper`,
+  the full pass's group, rather than one of its own: seen.json decides what
+  has already been alerted, and two runs restoring and saving the same cache
+  entry at once means the loser's writes vanish. Queueing behind a 30-minute
+  full pass costs a hot run its slot; a lost state write costs a real find.
+- Shopify states its own release time, in a payload we already fetch. Every
+  product in `/products.json` carries `published_at` and `created_at`, and
+  `fetch_shopify` discarded both for months -- so six verified shops can date
+  a listing exactly, at zero extra request cost, and the row for a bottle
+  listed four minutes ago rendered identically to one listed last month.
+  `listed_at` is carried through `check_shop` (which builds its row key by
+  key, so it has to be named there), rendered by `notify._listed_age`, and
+  used by `order_hits` to lead each classification section with the freshest
+  bottle. It is honest in the other direction too: a listing the shop
+  published three months ago, arriving as a *new* find, says our detection
+  was late rather than that the wine is fresh. No HTML shop states anything
+  comparable, so it is absent there -- rendered as nothing, never guessed,
+  and never sorted to either end of time.
+- `fetch_hot` reads Shopify's `/products.json` **in full**, not page one.
+  Shopify does not document that ordering as newest-first, and assuming it
+  would quietly drop a release onto a page nobody asked for. At 250 products
+  a page these shops cost a request or two, so there is nothing to buy by
+  guessing -- recency comes from `published_at`, a fact the payload states,
+  rather than from an order we inferred.
+- The new-arrivals strip is fetched **first** and merged **last**. It used to
+  be both last, which made the freshest page in the system the first thing a
+  binding budget or clock took away -- precisely backwards, because a
+  catalogue cut short is a TRUNCATED row that says so while a strip never
+  read is a bottle nobody hears about. The merge stays after the catalogue
+  and the producer index because `off_catalogue` means "listings the
+  catalogue does not carry", and that number only means what it says once the
+  catalogue is already in `items`.
+- A release feed is a fact to be read, not a URL pattern to be guessed, and
+  two obvious ones were checked and rejected. **Sitemaps**: pangee advertises
+  one in robots.txt and it is a real `<sitemapindex>`, but its single
+  sub-sitemap's `<lastmod>` reads 2024-02-06 -- about two years stale.
+  **Sorting a catalogue by newest**: winenot and pangee both publish
+  `Disallow: /*?order=` and `Disallow: /*&order=`, so that URL is a shop
+  saying no. Neither is a recency signal here, and a guess about what a
+  platform publishes is not evidence -- read the file.
 - A failed page is not a failed shop, and the handlers say so by naming
   `crawler.FetchError` rather than a tuple of its subclasses. `get()` raises
   five things -- `Disallowed`, `CircuitOpen`, `BudgetExceeded`, `Challenged`,

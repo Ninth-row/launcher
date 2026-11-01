@@ -81,6 +81,7 @@ jobs:
           path: |
             seen.json
             observations.json
+            watchlist.json
             .cache
           key: wine-scraper-state-${{ github.run_id }}
           restore-keys: |
@@ -112,4 +113,5 @@ jobs:
             hits.json
             observations.json
             coverage.json
+            watchlist.json
           retention-days: 30

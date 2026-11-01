@@ -73,6 +73,61 @@ def _parse_iso(ts):
     return datetime.fromisoformat(ts)
 
 
+def _listed_age(hit, now=None):
+    """How long ago the shop says it published this listing, or None.
+
+    Shopify states `published_at` per product in `/products.json`, which the
+    run already fetches. For a grower allocated in dozens of bottles the gap
+    between "listed four minutes ago" and "listed last month" is the whole
+    decision, and the row read identically either way.
+
+    It is also honest in the other direction: a bottle the shop published
+    three months ago, reaching the inbox as a *new* listing, says our
+    detection was late rather than that the wine is fresh.
+
+    None for every HTML shop, because none of them states a comparable time --
+    rendered as nothing rather than guessed. A value that will not parse, or
+    one with no timezone, is treated the same way: a malformed timestamp from
+    a shop must not be able to break the digest.
+    """
+    listed = hit.get("listed_at")
+    if not listed:
+        return None
+    try:
+        when = _parse_iso(listed)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        return None
+    minutes = ((now or datetime.now(timezone.utc)) - when).total_seconds() / 60
+    if minutes < 0:
+        return None          # a shop's clock ahead of ours says nothing
+    if minutes < 90:
+        return f"{minutes:.0f} min ago"
+    if minutes < 48 * 60:
+        return f"{minutes / 60:.0f}h ago"
+    return f"{minutes / (60 * 24):.0f} days ago"
+
+
+def _listed_sort_key(hit):
+    """Newest listing first, and the undated ones after -- never interleaved.
+
+    ISO strings cannot be compared as text across different UTC offsets, so
+    this parses. Only the HTML shops are undated, and `sorted` is stable, so
+    they keep the order the classification gave them instead of being guessed
+    to either end of time.
+    """
+    listed = hit.get("listed_at")
+    if listed:
+        try:
+            when = _parse_iso(listed)
+        except (TypeError, ValueError):
+            when = None
+        if when is not None and when.tzinfo is not None:
+            return (0, -when.timestamp())
+    return (1, 0.0)
+
+
 def alert_reason(hit, prev, now, shop_last_read=None):
     """new item -> always. A >10% drop since the last alert -> always, too:
     the cooldown is there to stop the digest repeating itself, and a price
@@ -259,7 +314,8 @@ def reason_phrase(hit):
     if reason == "deal":
         return "now a deal"
     if reason == "new":
-        return "new listing"
+        age = _listed_age(hit)
+        return f"new listing, {age}" if age else "new listing"
     return ""
 
 
@@ -359,7 +415,14 @@ def order_hits(hits):
     """
     ordered = []
     for section in SECTION_ORDER:
-        ordered.extend(h for h in hits if h.get("classification") == section)
+        # Freshest first within the section. The classification still decides
+        # the section, because a DEAL listed yesterday beats a FAIR listed a
+        # minute ago -- but inside one section the bottle that just appeared
+        # is the one with stock left, and it was previously last if the shop
+        # happened to return it last.
+        ordered.extend(sorted(
+            (h for h in hits if h.get("classification") == section),
+            key=_listed_sort_key))
     return ordered
 
 
