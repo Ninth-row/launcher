@@ -22,6 +22,7 @@ def pipeline(monkeypatch, tmp_path):
     monkeypatch.setattr(notify, "HITS_PATH", tmp_path / "hits.json")
     monkeypatch.setattr(market, "OBSERVATIONS_PATH", tmp_path / "observations.json")
     monkeypatch.setattr(scraper, "COVERAGE_PATH", tmp_path / "coverage.json")
+    monkeypatch.setattr(scraper, "WATCHLIST_PATH", tmp_path / "watchlist.json")
     # The real send path must run so state is persisted; only SMTP is stubbed.
     def fake_send(body, subject=None, html=None):
         sent.append(body)

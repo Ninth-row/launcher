@@ -858,6 +858,37 @@ HTTP header or printed.
   otherwise it is logged, the row is marked TRUNCATED, and the rest are read.
   `catalogue_starts` pins the measured-best catalogue first, so this degrades
   in the right order.
+- The bottles we have found are remembered by URL, because nothing else
+  remembered them. `observations.json` keeps `(producer, seg, shop)` and no
+  URL at all, `seen.json` keeps only a `sha256(shop|url|variant)`, and
+  `hits.json` is not carried between runs -- so when a shop's walk was cut
+  short, the few dozen URLs we actually care about went unchecked and nothing
+  said so. `watchlist.json` (gitignored, carried by `actions/cache`, pruned on
+  the same 180-day window `market.merge` uses) is written from the **full
+  pass only**: a hot pass reads one surface per shop, so the URLs it did not
+  see are not absent -- they were never looked for, and pruning on that basis
+  would forget the whole list.
+  `recheck_watchlist` re-reads them through `detail_price`, the same
+  product-page reader `_price_from_detail_pages` uses, and only for a shop
+  whose coverage row says `TRUNCATED`: a shop that refused us, was blocked or
+  was never reached is not somewhere to spend what little is left, which is
+  the trade the retry pass already makes. The coverage row is left alone
+  because it describes the catalogue walk and this is not one; what the
+  re-read found gets its own digest note. Two things are load-bearing: the
+  producer is **re-derived** from the stored title by `matched_aliases` rather
+  than trusted from the entry, because a remembered attribution would outlive
+  an alias being corrected -- the exact bug `NAMESAKES` exists to prevent --
+  and a re-read that finds `quantity: 0` goes to `sold_out`, never to hits, so
+  it stays out of `seen.json` and its restock still reads as new.
+- Every state file must be in **both** workflows' `actions/cache` path list,
+  even the ones that workflow never touches. `actions/cache` saves only the
+  paths it is given and the full pass restores the most recent matching
+  entry -- which is usually a hot run's. Leaving `watchlist.json` out of
+  `hot.yml` would quietly drop it from every hot entry, so the next full pass
+  would restore a state without it and rebuild from nothing. A new state file
+  also needs `.gitignore`: the suite writes through these paths, and one went
+  into the repo full of `zzz-shopify` rows before `conftest.py` redirected
+  `WATCHLIST_PATH` to `tmp_path` like the other four.
 - Being first is the point, and the cache TTL is the lever -- not the cron.
   A full pass is ~410 requests and 11-32 minutes against a 450 budget, so it
   cannot run often enough to win a race for a bottle that exists in dozens,

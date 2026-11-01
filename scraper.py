@@ -1323,6 +1323,125 @@ def _add_unseen(items, extra, how, fallback_how):
     return items, how, len(fresh)
 
 
+# The bottles we have actually found, remembered by URL.
+#
+# A catalogue walk is how a *new* bottle is discovered, and it is the first
+# thing the request budget and the run clock cut: a TRUNCATED row means some
+# of that shop's pages went unread, and the wines we watch are a few dozen
+# URLs that were on them last time. Nothing persisted those URLs --
+# observations.json keeps (producer, seg, shop) and no URL at all, seen.json
+# keeps only a sha256 of one, and hits.json is not carried between runs -- so
+# a watched bottle went unchecked whenever its shop's walk was cut short, and
+# nothing said so.
+WATCHLIST_PATH = Path(os.environ.get(
+    "WATCHLIST_PATH", Path(__file__).parent / "watchlist.json"))
+# The same window market.py keeps an observation for. Past it a URL is likelier
+# to 404 than to sell anything, and re-checking it spends a request to learn
+# that.
+WATCHLIST_MAX_AGE_DAYS = 180
+# Bounded by matches rather than by catalogue size, exactly like
+# MAX_DETAIL_FETCHES: the watchlist only ever holds bottles that matched a
+# producer we watch, and this is the net for the day one shop holds far more
+# of them than expected.
+MAX_WATCHLIST_FETCHES = 25
+
+
+def load_watchlist():
+    """{url: entry}, and {} for a missing or unreadable file.
+
+    Empty on loss, like market.load_observations -- and like it, main() states
+    the carried-in count so a list that stopped surviving between runs is
+    visible rather than silently indistinguishable from a quiet week.
+    """
+    try:
+        store = json.loads(WATCHLIST_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+    return store if isinstance(store, dict) else {}
+
+
+def merge_watchlist(store, hits, today=None):
+    """Remember each hit's URL, and forget what nobody has confirmed lately."""
+    today = today or dt.date.today()
+    cutoff = today - dt.timedelta(days=WATCHLIST_MAX_AGE_DAYS)
+    out = {}
+    for url, entry in (store or {}).items():
+        try:
+            confirmed = dt.date.fromisoformat(entry.get("last_confirmed", ""))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if confirmed >= cutoff:
+            out[url] = entry
+    for hit in hits:
+        url = hit.get("url")
+        if not url:
+            continue
+        out[url] = {
+            "shop": hit.get("shop"),
+            "producer": hit.get("producer"),
+            "title": hit.get("title"),
+            "last_confirmed": today.isoformat(),
+        }
+    return out
+
+
+def save_watchlist(store):
+    WATCHLIST_PATH.write_text(
+        json.dumps(store, indent=1, sort_keys=True) + "\n")
+
+
+def recheck_watchlist(shop, entries, crawler_client):
+    """Open the watched bottles a cut-short walk did not reach.
+
+    `entries` is an iterable of (url, watchlist entry) pairs. Returns
+    (hits, sold_out), split the way check_shop splits them, because a listing
+    nobody can buy is not a find: it must stay out of hits.json, out of the
+    price pool and above all out of seen.json, which is what lets its restock
+    read as new.
+
+    Read through `detail_price`, the same product-page reader
+    `_price_from_detail_pages` uses: a product page states its price and, on
+    PrestaShop, its `quantity`.
+
+    The producer is **re-derived** from the stored title rather than trusted
+    from the entry. Attribution in this project comes from matching and
+    nowhere else -- a remembered producer would outlive an alias being
+    corrected, which is the bug NAMESAKES exists to prevent. A title that no
+    longer matches anything is skipped rather than reported under the name it
+    had last week.
+    """
+    hits, sold_out = [], []
+    for url, entry in list(entries)[:MAX_WATCHLIST_FETCHES]:
+        try:
+            page = crawler_client.get(url)
+            page.raise_for_status()
+        except (crawler.BudgetExceeded, crawler.CircuitOpen,
+                crawler.Disallowed):
+            # The host saying "not this run" rather than "not this page".
+            break
+        except crawler.FetchError:
+            continue
+        price, stock = detail_price(page.text or "")
+        if price is None:
+            continue
+        title = (entry or {}).get("title") or ""
+        for producer, alias in matched_aliases(title, shop.get("name")).items():
+            row = {
+                "shop": shop["name"],
+                "producer": producer,
+                "title": title,
+                "price": price,
+                "url": url,
+                "variant_title": "",
+                "matched_alias": alias,
+                # A product page states no publication time on any platform
+                # this reads, so the digest shows none rather than guessing.
+                "listed_at": None,
+            }
+            (sold_out if stock is False else hits).append(row)
+    return hits, sold_out
+
+
 def catalogue_starts(shop, now=None):
     """Where to begin reading this shop's catalogue, and in what order.
 
@@ -1920,6 +2039,14 @@ def main():
     unreached = []           # verified shops the run never got to
     verified_names = [s["name"] for s in SHOPS if s.get("verified", True)]
     # Rotated so a binding budget does not starve the same tail every hour.
+    # Carried between runs by actions/cache, so losing it is a real state and
+    # not a hypothetical one -- stated for the same reason the price pool's
+    # count is stated.
+    watchlist = {} if HOT else load_watchlist()
+    if not HOT:
+        print(f"{len(watchlist)} watched bottle URL(s) carried in from "
+              f"previous runs.")
+
     order = shop_order(SHOPS)
     if HOT:
         # Only the shops with a surface worth reading fresh. The rest are not
@@ -2069,6 +2196,43 @@ def main():
             print(f"[{shop['name']}] recovered on retry, {len(hits)} hit(s) from "
                   f"{hits.products_parsed} product(s)")
 
+    # The bottles we watch, on the shops whose walk was cut short.
+    #
+    # TRUNCATED means some of this shop's pages went unread -- the budget
+    # bound, the pager outran MAX_PAGES_PER_SHOP, a category died -- and the
+    # few dozen URLs we actually care about were on those pages last time. The
+    # coverage row is left alone: it describes the catalogue walk, and this is
+    # not one. What it found is reported as its own note.
+    #
+    # Only shops that answered, and only URLs this run has not already seen. A
+    # shop that refused us, was blocked, or was never reached is not somewhere
+    # to spend what little is left -- that budget belongs to a shop nobody has
+    # read once, which is the same trade the retry pass makes.
+    rechecked = []
+    if watchlist:
+        seen_now = {h.get("url") for h in all_hits}
+        by_name = {s["name"]: s for s in order}
+        for row in coverage:
+            shop = by_name.get(row["shop"])
+            if row.get("status") != "TRUNCATED" or shop is None:
+                continue
+            pending = [(u, e) for u, e in watchlist.items()
+                       if e.get("shop") == row["shop"] and u not in seen_now]
+            if not pending:
+                continue
+            found, missing = recheck_watchlist(shop, pending, crawler_client)
+            if not (found or missing):
+                continue
+            absorb(shop, ShopResult(
+                found, products_parsed=len(found) + len(missing),
+                sold_out=missing))
+            rechecked.append(
+                f"{row['shop']}: {len(found)} of {len(pending)} watched "
+                f"URL(s) re-read after a TRUNCATED walk")
+            print(f"[{row['shop']}] re-checked {len(pending)} watched URL(s) "
+                  f"the truncated walk did not reach: {len(found)} listed, "
+                  f"{len(missing)} sold out")
+
     # A shop the run never got to needs a row of its own. Without one it
     # simply vanishes from the table -- and the table is the one place that
     # answers "did we look at all", so a missing row is the exact shape of
@@ -2179,6 +2343,10 @@ def main():
     # file out of the actions/cache race between the two workflows.
     if not DRY_RUN and not HOT:
         market.save_observations(store)
+        # Written from the full pass only. A hot pass reads one surface per
+        # shop, so the URLs it did not see are not absent -- they were never
+        # looked for, and pruning on that basis would forget the whole list.
+        save_watchlist(merge_watchlist(watchlist, all_hits))
 
     # Which shops we actually read, so a bottle missing from a shop we never
     # reached is not announced as a restock when the shop comes back.
@@ -2254,6 +2422,9 @@ def main():
         # coverage table, so without this line the flakiness is invisible
         # until the day the retry fails too and the shop looks newly broken.
         "Failed once, read on retry": recovered,
+        # A cut-short walk is already a TRUNCATED row; this says what was
+        # done about the bottles on the pages it did not reach.
+        "Watched bottles re-read after a cut-short walk": rechecked,
     }
     # Before the email, so the run's own page carries the result even when the
     # digest is empty, capped, or never sent at all.

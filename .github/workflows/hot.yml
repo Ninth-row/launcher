@@ -63,12 +63,21 @@ jobs:
       # The same cache entry the full pass uses, because seen.json is the
       # whole point: a hot pass must know what has already been alerted, and
       # what it alerts must be known to the next full pass.
+      #
+      # The path list must stay identical to scraper.yml's even for the files
+      # a hot pass never touches. actions/cache saves only the paths it is
+      # given, and the full pass restores the most recent matching entry --
+      # which is usually one of these. Leaving watchlist.json or
+      # observations.json out here would quietly drop them from every hot
+      # run's entry, so the next full pass would restore a state missing them
+      # and rebuild from nothing.
       - name: Restore scraper state cache
         uses: actions/cache@v4
         with:
           path: |
             seen.json
             observations.json
+            watchlist.json
             .cache
           key: wine-scraper-state-${{ github.run_id }}
           restore-keys: |

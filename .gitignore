@@ -6,4 +6,5 @@ seen.json
 hits.json
 coverage.json
 observations.json
+watchlist.json
 probe_output/
