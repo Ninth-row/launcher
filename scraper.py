@@ -1710,6 +1710,12 @@ def fetch_html(shop, crawler_client):
         if _price_from_detail_pages(shop, items, crawler_client):
             how = how or "detail"
 
+    # Before the document reader, because this one costs no request: the
+    # island is already in the page the walk fetched.
+    if not items and first_html:
+        items = _fetch_via_wix_island(shop, first_html, first_url)
+        how = "wix" if items else how
+
     if not items and first_html:
         items = _fetch_via_pdf_list(shop, first_html, first_url, crawler_client)
         how = "pdf" if items else how
@@ -1777,6 +1783,108 @@ def fetch_html(shop, crawler_client):
     return ParsedItems(items, truncated=truncated, pages_read=pages_read,
                        off_catalogue=off_catalogue,
                        pages_total=pages_total if len(starts) == 1 else None)
+
+
+# Wix renders its product grid in the browser from a JSON island, so the
+# served HTML carries the product *links* and no repeated priced structure for
+# autoselect to climb -- which is why feralart probed as "responded and
+# parsed, but zero products found" while its page held 40 currency markers and
+# 25 product links all along. The island is the catalogue, stated better than
+# a grid states it: a numeric price, the currency named, and a real stock flag
+# instead of a French word to guess from. This is the demainlesvins
+# `data-product` lesson in a different costume -- "no grid" is not "no data".
+WIX_PRODUCT_LIST = '"productsWithMetaData":{"list":'
+
+
+def _json_array_at(text, start):
+    """The JSON array beginning at `start`, found by matching brackets.
+
+    A regex cannot do this: product descriptions contain brackets and escaped
+    quotes. Strings are tracked so a `]` inside one does not end the array.
+    """
+    depth, in_string, escaped = 0, False, False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def wix_products(html):
+    """The products a Wix Stores page states in its own JSON island."""
+    marker = html.find(WIX_PRODUCT_LIST)
+    if marker < 0:
+        return []
+    start = html.find("[", marker + len(WIX_PRODUCT_LIST) - 1)
+    if start < 0:
+        return []
+    blob = _json_array_at(html, start)
+    if blob is None:
+        return []
+    try:
+        records = json.loads(blob)
+    except ValueError:
+        return []
+    return records if isinstance(records, list) else []
+
+
+def _fetch_via_wix_island(shop, page_html, page_url):
+    """Read a Wix Stores catalogue out of the page already in hand.
+
+    No extra request: the island is in the HTML the walk just fetched, which
+    is the mistake `_fetch_via_producer_index` was corrected for.
+
+    `text` is the product *name* and nothing else, deliberately. feralart
+    sells books and candles whose blurbs name growers -- its "A Vif - Terroirs
+    en Feu" publication lists "Julie Balagny, L'Arbe Blanc, Labet, Aurelien
+    Lefort" in the description, and matching that would file a book as a
+    bottle of Labet at the book's price. A blog post about Overnoy is not a
+    bottle of Overnoy, and neither is a book about Labet.
+
+    `price` is the payable figure; Wix puts the struck-through one in
+    `comparePrice`, which is never read -- the price is the one you would pay.
+    """
+    items = []
+    for record in wix_products(page_html):
+        if not isinstance(record, dict):
+            continue
+        name = (record.get("name") or "").strip()
+        slug = (record.get("urlPart") or "").strip()
+        if not name or not slug:
+            continue
+        price = record.get("price")
+        price = positive_price(float(price)) if isinstance(
+            price, (int, float)) else None
+        stated = record.get("isInStock")
+        items.append({
+            "text": name,
+            "title": name,
+            "price": price,
+            "url": urljoin(page_url, f"/product-page/{slug}"),
+            "variant_title": "",
+            # The island states stock outright, so there is nothing to infer
+            # from the card's words. Silence is still not "sold out".
+            "in_stock": in_stock(stated if isinstance(stated, bool) else None,
+                                 name),
+        })
+    if items:
+        print(f"[{shop['name']}] read {len(items)} product(s) from the Wix "
+              f"JSON island on {page_url}")
+    return items
 
 
 def _fetch_via_pdf_list(shop, page_html, page_url, crawler_client):

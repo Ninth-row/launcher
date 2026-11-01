@@ -239,12 +239,18 @@ probed yet:
     placeholders and its fixture is a placeholder too. It is the one entry
     here with no measured reason -- run the probe before reading anything
     into it;
-  - **feralart** is Wix, and the probe on 2026-11-01 got HTTP 400 and 404
-    across its candidate paths and "responded and parsed, but zero products
-    found" on the four that answered -- including `/champagne`,
-    `/champagne-casanova` and `/auction-wines`, whose captures are in
-    `probe_pages/`. Wix with no readable grid is the wineshopbiarritz shape,
-    so the question worth asking next is whether it publishes a document;
+  - **feralart** is Wix, and "responded and parsed, but zero products found"
+    was wrong about it in the way vinovivo and demainlesvins were wrong.
+    `probe_pages/feralart.www-feralartetvin-com.shop.html` holds 40 currency
+    markers and 25 `/product-page/` links, and a JSON island stating **12
+    products with numeric prices, EUR, `isInStock` and a slug each**. Wix
+    renders its grid in the browser from that island, so there is no repeated
+    priced structure for `autoselect` to climb. `_fetch_via_wix_island` now
+    reads it, and it stocks Tom Gauditiabois. It is still unverified only
+    because `probe.py --apply` is the one thing that may verify a shop -- run
+    it. Note the shop is more than `/shop`: there is a `/things` section, plus
+    `/champagne` and `/auction-wines`, and the island on `/shop` is page one
+    of "All Products", so this is a `catalog_paths` shop;
   - **cuvee3000** answers every path — `/`, `/en`, `/en/wines`, `/fr`, and
     `/vins.php`, which cannot exist — with the same ~1.3KB of title,
     `<noscript>` and one `<script>`: no anchor, no meta-refresh, and a body
@@ -924,6 +930,53 @@ HTTP header or printed.
   also needs `.gitignore`: the suite writes through these paths, and one went
   into the repo full of `zzz-shopify` rows before `conftest.py` redirected
   `WATCHLIST_PATH` to `tmp_path` like the other four.
+- "No grid" is not "no data". A Wix Stores page serves the product *links*
+  and renders the grid in the browser from a JSON island, so `autoselect` --
+  which finds a card by its price -- sees nothing and the probe reports
+  "responded and parsed, but zero products found". feralart read that way on
+  every path while its `/shop` page held 40 currency markers, 25
+  `/product-page/` links and an island stating 12 products. `wix_products`
+  finds `"productsWithMetaData":{"list":` and matches brackets to the end of
+  the array -- not a regex, because descriptions contain brackets and escaped
+  quotes -- and `_fetch_via_wix_island` reads it from the page already in
+  hand, costing no request. It is a *better* source than a grid: `price` is
+  numeric, `currency` is named, and `isInStock` is a flag rather than a French
+  word to infer from. This is the demainlesvins `data-product` lesson in a
+  different costume, and it is tried before the document reader because it is
+  free.
+  **Only the `name` field reaches the matcher.** feralart sells books and
+  candles whose blurbs name growers: its real "A Vif - Terroirs en Feu"
+  publication describes itself as "covering Julie Balagny, L'Arbe Blanc,
+  **Labet**, Aurelien Lefort…", and `matched_aliases` returns Labet for that
+  sentence. Matching descriptions would file a book as a bottle of Labet at
+  the book's price -- a blog post about Overnoy is not a bottle of Overnoy,
+  and neither is a book about Labet. `comparePrice` is never read either: Wix
+  puts the struck-through figure there and `price` is the one you would pay.
+  `tests/fixtures/feralart-wix-island-excerpt.html` keeps three of the shop's
+  twelve records verbatim.
+- Generating the page is not publishing it, and the gap is silent.
+  `wine.html` is committed by `dashboard.yml`; GitHub **Pages** deploys it in
+  a separate run. When a Pages deployment wedges, every later one is refused
+  with "Deployment request failed ... due to in progress deployment" -- and
+  `dashboard.yml` goes on reporting success while the live page stays frozen.
+  On 2026-11-01 it stayed frozen across four rebuilds and two merges; the
+  owner pressed "Rebuild this page" repeatedly and the only symptom was a
+  button that would not appear, because the published copy was the build from
+  `5579c07`. `dashboard.yml`'s last step now reads the most recent `pages
+  build and deployment` conclusion and fails loudly on `failure`. It reads the
+  *previous* deployment, since this push's has not started -- which is the
+  right question anyway, because a wedge is a standing condition.
+- State lives in two caches, and the split is load-bearing. `seen.json`,
+  `observations.json` and `watchlist.json` are a few hundred KB; `.cache` is
+  ~6.5 MB of fetched pages. Cached under one key they are evicted under one
+  key -- and run 41290903522 restored nothing, so the pool arrived empty, the
+  POOL note fired, and every verdict that run rested on a single crawl.
+  Losing the HTTP cache costs requests and nothing else; losing `seen.json`
+  re-alerts every bottle and then silences each for 30 days, and **the hot
+  pass depends on it outright**, because it alerts on URLs *absent* from that
+  file -- with no state it would mail the whole shelf every hour. So
+  `wine-scraper-state-` holds the three small files and
+  `wine-scraper-httpcache-` holds `.cache`, in both workflows.
 - Being first is the point, and the cache TTL is the lever -- not the cron.
   A full pass is ~410 requests and 11-32 minutes against a 450 budget, so it
   cannot run often enough to win a race for a bottle that exists in dozens,
