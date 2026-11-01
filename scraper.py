@@ -495,15 +495,6 @@ SHOPS = [
         "verified": True,
     },
     {
-        "name": "vinscheznous",
-        "platform": "html",
-        "url": "https://www.vinscheznous.com",
-        "item_selector": "div.product",
-        "title_selector": "h2.product-title",
-        "price_selector": "span.price",
-        "verified": False,
-    },
-    {
         "name": "cavepurjus",
         "platform": "html",
         "url": "https://www.cavepurjus.com",
