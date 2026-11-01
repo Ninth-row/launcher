@@ -525,12 +525,9 @@ SHOPS = [
     },
     {
         "name": "naturavin",
-        "platform": "html",
+        "platform": "woocommerce",
         "url": "https://www.naturavin.be",
-        "item_selector": "div.product",
-        "title_selector": "h2.product-title",
-        "price_selector": "span.price",
-        "verified": False,
+        "verified": True,
     },
     {
         "name": "zuiverwijnen",
