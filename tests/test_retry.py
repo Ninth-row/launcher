@@ -77,8 +77,8 @@ def _coverage(pipeline):
 
 def test_a_shop_that_refuses_is_not_asked_twice(pipeline, capsys):
     # mesbourgognes answered HTTP 403 to every request of a live run. That is
-    # the sentence naturavin and demainlesvins said, and it is answered by not
-    # going there -- a second pass would only be asking twice.
+    # the sentence demainlesvins said before it was removed, and it is answered
+    # by not going there -- a second pass would only be asking twice.
 
     client = pipeline(BODIES, refuse_hosts={"shopify.test": 403})
     assert client.reopened == [], "a 403 was retried"
