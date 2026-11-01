@@ -209,7 +209,9 @@ shops added from research/guesswork rather than a real observed response
 --apply`, which fetches, parses and flags in a single run against a real
 response; never by hand.
 
-17 shops are currently verified and fetched on every run. Two shops since
+18 shops are currently verified and fetched on every run -- oenovinia was
+added through the issue form as #27 and verified by probe run
+41322696399. Two shops since
 removed, vinovivo and purovino, spent months listed here as "prices are
 rendered client-side" — and that verdict was wrong twice over. The price *was* in
 their HTML; `autoselect._price_nodes` could not see it, because it accepted a
@@ -1032,9 +1034,10 @@ HTTP header or printed.
   `FRESH_PAGE_TTL_SECONDS` instead: `hot_surface()` admits a Shopify shop
   (its `/products.json` doubles as a recency feed) or an HTML shop with a
   configured `new_arrivals` path, and `fetch_hot()` reads that and nothing
-  else -- measured at 39 pages and 3m48s over 10 of the 17 verified shops
-  (run 41305306786), most of it mareehaute's 16, because `fetch_hot` reads
-  Shopify's `/products.json` in full rather than guessing at its order. The dashboard has a **Run hot pass** button beside the full one; the
+  else -- measured at 39 pages and 3m48s over the 10 shops that had a surface
+  (run 41305306786), most of it mareehaute's 16 pages, because `fetch_hot`
+  reads Shopify's `/products.json` in full rather than guessing at its order.
+  The dashboard has a **Run hot pass** button beside the full one; the
   dry-run checkbox applies to either. A shop with neither
   surface is **not read at all** rather than read badly; a partial catalogue
   walk hourly would spend every shop's politeness budget to learn nothing the
