@@ -353,10 +353,10 @@ and the "Page n sur 84" footer; `tests/fixtures/wineshopbiarritz-list-excerpt.tx
 keeps the real rows. Read a shop's columns, not just its rows.
 
 `crawler.Challenged` exists because a shop can answer HTTP 200 with a bot
-challenge rather than its catalogue: **vinnaturel.fr** serves "One moment,
+challenge rather than its catalogue: **vinnaturel.fr** served "One moment,
 please... Please wait while your request is being verified", and vinopura.nl
-served 221 bytes of meta-refresh to `/.well-known/sgcaptcha/` before it was
-removed from the list. Both read as healthy for weeks — one as "ok, 0
+served 221 bytes of meta-refresh to `/.well-known/sgcaptcha/`. Both shops
+have since left the list; the behaviour they taught has not. Both read as healthy for weeks — one as "ok, 0
 products", the other as a "parse error" — and both went into the 6h cache, so
 each challenge stayed true for six more runs. Such a shop now gets a `blocked`
 coverage row and a line in the digest. Do not try to get past a challenge: it
@@ -364,8 +364,8 @@ is a shop saying no.
 
 Shops leave the list too. vinopura, volatilewines, purovino, biowijnclub,
 vinifine, lespeauxdevins, vinibee, vinovivo, puurwijnshop, petitescaves,
-vinnaturelbe, demainlesvins, naturavin and vinscheznous were removed on
-request.
+vinnaturelbe, demainlesvins, naturavin, vinscheznous and vinnaturel were
+removed on request.
 Between them the first five were 726 products and no hits, and purovino had
 only just been made readable; the next three were 1320 products and two hits
 (vinibee's Richard Leroy) at 13 pages a run; puurwijnshop was 709 listings and
@@ -957,8 +957,9 @@ HTTP header or printed.
 - A first-pass failure is not evidence a shop is down. A shop reported
   `unreachable` contributes no digest rows, nothing to the price pool, and a
   "watched but found nowhere" line its aliases did not earn -- and vinnaturel
-  answered a hand probe with a healthy 66KB catalogue minutes after a run had
-  written it off. `main()` retries `UpstreamError` and `CircuitOpen` **once**,
+  once answered a hand probe with a healthy 66KB catalogue minutes after a run
+  had written it off. That shop has since closed its online store and left the
+  list, but it is the reason this retry exists and the reason it stays. `main()` retries `UpstreamError` and `CircuitOpen` **once**,
   after every other shop is read, calling `Crawler.reopen()` to clear the
   breaker for that host alone: by then it has had twenty quiet minutes, which
   is the pause a rate limiter is asking for. Nothing else is retried --
@@ -1089,6 +1090,16 @@ HTTP header or printed.
   everything else that stops the walk early *is* truncation and must say so,
   and **nothing re-raises** -- the catalogue page is already in hand and
   nothing a supplementary reader does may cost it.
+  **An empty body is not an empty catalogue**, and conflating them produced
+  the first wrong thing this reader ever said. Probe run 41461210780 printed
+  "gallery ended at page 21 of 77" for feralart, and `/shop?page=22` serves
+  twelve wines and titles itself "22/77": the walk had spent its follow
+  budget and been handed a blank 200, which the reader read as the shop
+  running out. A blank body means the page never arrived, so it is
+  TRUNCATED -- the verdict `BudgetExceeded` already gets -- while a page that
+  *was* served and holds no island really is the gallery ending. The test
+  fake's default had to change with it: serving `""` for an unmapped page
+  modelled a failure as an ending.
   A gallery that runs out *before* its stated total is the third case, and it
   gets a number rather than a flag. Nothing stopped us, so the row is not
   TRUNCATED -- but the shop's claim and what it served disagree, and either
@@ -1236,14 +1247,28 @@ HTTP header or printed.
   so. A supplementary reader -- the producer index, the new-arrivals strip --
   catches the base class with no page-one exception at all: the catalogue is
   already in hand, and nothing a supplement does may cost it.
-- **vinnaturel** is Cave de Trinquetaille, PrestaShop 1.6, and it was the
-  third shop judged from the wrong page -- its landing page is not its
-  catalogue, and reading it gave 12 products and a clean `ok` row for weeks.
-  Its own menu offers no "all wines" link, so the bottle range is three colour
-  categories (`/31-vins-rouges-bouteilles-` alone states "Il y a 108 produits"
-  and pages to `?p=6`, plus `/28` blancs and `/29` roses). Bag-in-box lives
-  separately under `/24` and stays out on purpose: a 3L BIB is not a bottle
-  and would enter the price pool as one.
+- **vinnaturel** was removed on 2026-11-02, and it is the first shop here to
+  leave because it *moved* rather than because it broke. It was Cave de
+  Trinquetaille, PrestaShop 1.6, read as three colour categories; it had also
+  been the third shop judged from the wrong page, its landing page giving 12
+  products and a clean `ok` row for weeks.
+  It then printed `ok | 3 pages | 0 products` and a DRIFT line for two runs
+  running, while its own fixture still parsed 12 -- which is the signature of
+  a live site that changed, not of an adapter that broke. The captures probe
+  run 41461210780 saved say what changed, in the shop's own words: the pages
+  are written in the past tense ("L'ancienne boutique classait aussi ses vins
+  par couleur"), they link `maisonantonelle.fr/collections/all`, and the
+  contact is now `maisonantonelle@gmail.com`. The cave merged with the bistrot
+  L'Antonelle and the shop went with it.
+  **A DRIFT line is a question, not a diagnosis.** It says the adapter read
+  nothing where the fixture reads something, and the causes are different
+  animals: a restyle, a block, or -- here -- a shop that is no longer at that
+  address. Reading the captures answered it in a minute, where guessing at
+  selectors would have spent an afternoon on a site with nothing left to sell.
+  The successor is `maisonantonelle.fr`, and `/collections/all` is a Shopify
+  path, so it would be cheap and well-read if it is ever worth adding. That is
+  a watchlist decision, and adding it is a new shop through the issue form
+  rather than a repair of this one.
 - Catalogues are paged. Any new fetcher must walk pages, not just read the
   first one -- seeing only page one turns a real hit into a silent miss,
   which is the exact failure this project exists to avoid.
@@ -1298,6 +1323,20 @@ HTTP header or printed.
   One live run spent 24 requests on a single shop, all 404, and 107 of 150
   across eight -- with eleven unverified shops the budget binds and the
   tail goes unprobed without saying so.
+- **The probe's follow budget is per shop, not per candidate**, and that is
+  the same lesson arriving through a different door. `try_parse` builds a
+  fresh `CannedCrawler` for every endpoint tried, so a shop whose pages the
+  fetcher wants to walk paid `PROBE_FOLLOW_BUDGET` again on each one --
+  feralart holds a readable Wix island on five candidates, so probe run
+  41461210780 spent **150 of 150 requests** on it and vinnaturel was never
+  reached. Reported honestly as `not_reached`, which is not the same as
+  avoided. `FollowAllowance` is created once in `probe_shop` and shared by
+  every candidate; the number did not change, the scope did.
+  Both plumbing points need their own test, and the first attempt proved it:
+  a test that constructs `CannedCrawler` with an allowance directly passes
+  happily while `probe_shop` hands out a fresh one per candidate. One test
+  drives `try_parse`, another drives `probe_shop`, and each was checked by
+  reintroducing the defect it covers.
 - The repo is public, so issue forms are untrusted input. `apply_issue.py`
   must keep rejecting quote/backslash injection, non-https URLs and unsafe
   shop names, and `apply-config.yml` must keep gating on the author's *real*

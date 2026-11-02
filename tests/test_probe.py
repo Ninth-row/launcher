@@ -1101,3 +1101,98 @@ def test_the_probe_only_claims_verification_when_config_changed():
             / "probe.yml").read_text()
     assert 'grep -qx "scraper.py"' in body, "the message no longer checks config"
     assert "changed no shop config" in body
+
+
+def _wix_page(names, total):
+    """A Wix island page the fetcher will try to walk past."""
+    records = [{"name": n, "urlPart": n.replace(" ", "-"), "price": 20,
+                "isInStock": True} for n in names]
+    body = json.dumps({"list": records})[:-1] + f',"totalCount":{total}}}'
+    return ('<html><body><script type="application/json">'
+            '{"catalog":{"category":{"productsWithMetaData":'
+            + body + '}}}</script></body></html>')
+
+
+# --- one shop must not spend the whole run ----------------------------------
+
+def test_the_follow_budget_is_per_shop_not_per_candidate():
+    """Probe run 41461210780 spent 150 of 150 requests on feralart alone and
+    never reached vinnaturel.
+
+    `try_parse` builds a fresh CannedCrawler for every candidate endpoint, so
+    a shop whose pages the fetcher wants to walk paid the follow budget again
+    on each one -- and feralart holds a readable Wix island on five of them.
+    The allowance is shared across a shop's candidates, so the cost of
+    probing one shop is bounded whatever shape it turns out to have.
+    """
+    allowance = probe.FollowAllowance(total=3)
+
+    class Live:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, url, params=None, max_age=None):
+            self.calls += 1
+            return crawler.FetchResult(200, "<html><body></body></html>")
+
+    live = Live()
+    # Driven through try_parse, because that is where the per-candidate
+    # crawler is built: testing CannedCrawler directly proves the allowance
+    # works and not that the probe actually shares one, and a mutation that
+    # dropped the pass-through went unnoticed by exactly that test.
+    shop = {"name": "zzz-wix", "url": "https://shop.test",
+            "platform": "html"}
+    island = _wix_page(["one", "two"], total=200)
+    for _ in range(3):
+        probe.try_parse("html", shop, crawler.FetchResult(200, island),
+                        live=live, allowance=allowance)
+
+    assert live.calls <= 3, (
+        f"one shop spent {live.calls} live requests against an allowance of 3"
+    )
+    assert allowance.remaining == 0
+
+
+def test_a_crawler_given_no_allowance_keeps_its_own():
+    """Constructed directly, without a shop to share with, it still has a
+    budget of its own -- that is what the other probe tests rely on."""
+    canned = probe.CannedCrawler(
+        crawler.FetchResult(200, "x"), "html", live=None, follow_budget=2)
+
+    assert canned._allowance.remaining == 2
+
+
+def test_probing_one_shop_is_bounded_whatever_shape_it_turns_out_to_have():
+    """The allowance has to be made once per *shop*, in probe_shop.
+
+    Made per candidate it would be the defect again, and the try_parse test
+    above cannot see that: it is handed one allowance and so cannot tell
+    where it came from. This drives the real entry point, with a shop that
+    holds a walkable Wix island on every endpoint tried -- feralart's shape,
+    which cost 150 of 150 requests and left vinnaturel unprobed.
+    """
+    island = _wix_page(["one", "two"], total=4000)
+
+    class EverythingIsAnIsland(StubCrawler):
+        def __init__(self):
+            super().__init__({})
+            self.max_requests = 10_000
+
+        def get(self, url, params=None, max_age=None):
+            self.request_count += 1
+            self.calls.append(url)
+            if url.endswith(".json") or "/wp-json/" in url:
+                raise crawler.UpstreamError("HTTP 404", status_code=404)
+            return crawler.FetchResult(200, island)
+
+    stub = EverythingIsAnIsland()
+    probe.probe_shop({"name": "zzz-wix", "url": "https://shop.test",
+                      "platform": "html"}, stub)
+
+    # Candidates are capped by MAX_CATALOGUE_GUESSES; the follow-ups on top
+    # of them are capped once for the shop, not once for each.
+    ceiling = probe.MAX_CATALOGUE_GUESSES * 4 + probe.PROBE_FOLLOW_BUDGET
+    assert stub.request_count <= ceiling, (
+        f"one shop spent {stub.request_count} requests; the follow budget "
+        f"is being handed out per candidate again"
+    )

@@ -484,31 +484,6 @@ SHOPS = [
         "verified": True,
     },
     {
-        "name": "vinnaturel",
-        "platform": "html",
-        "url": "https://www.vinnaturel.fr",
-        # Cave de Trinquetaille, PrestaShop 1.6. Its landing page is not its
-        # catalogue: the run read 12 products from it for weeks and reported
-        # "ok", which is the third time a shop has been judged from the wrong
-        # page. Its own menu offers no "all wines" link at all -- the bottle
-        # range is three colour categories (VINS BLANCS / ROSES / ROUGES
-        # Bouteilles, /31 alone stating "Il y a 108 produits" and paging to
-        # ?p=6), with bag-in-box kept separate under /24 and therefore left
-        # out: a 3L BIB is not a bottle and would enter the price pool as
-        # one. No union exists here, so this is the winenot shape and gets a
-        # list; each category states its own size, so the pages fraction
-        # stays honest.
-        "catalog_paths": [
-            "31-vins-rouges-bouteilles-",
-            "28-vins-blancs-bouteilles",
-            "29-vins-roses-bouteilles-",
-        ],
-        "item_selector": "div.product",
-        "title_selector": "h2.product-title",
-        "price_selector": "span.price",
-        "verified": True,
-    },
-    {
         "name": "whynat",
         "platform": "shopify",
         "url": "https://www.whynat.fr",
@@ -2070,10 +2045,24 @@ def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
                   f"listing(s), catalogue TRUNCATED")
             truncated = True
             break
+        if not resp.text.strip():
+            # An empty body is not an empty catalogue: it is a page we did not
+            # get. Probe run 41461210780 printed "gallery ended at page 21 of
+            # 77" for feralart and that was false -- /shop?page=22 serves
+            # twelve wines and titles itself "22/77". The walk had run out of
+            # follow budget and was handed a blank 200, and the reader called
+            # it the shop running out. So this is truncation, the same verdict
+            # BudgetExceeded gets, because we were stopped.
+            print(f"[{shop['name']}] Wix page {page} came back empty; the page "
+                  f"was not read, so the catalogue is TRUNCATED rather than "
+                  f"finished")
+            truncated = True
+            break
         page_records = wix_products(resp.text)
         if not page_records:
-            # A page with no island is the end of the gallery, or a page that
-            # rendered nothing. Either way there is nothing after it to read.
+            # A real page that states no products *is* the end of the gallery:
+            # something was served and it held no island. Distinct from the
+            # blank body above, and deliberately not truncation.
             print(f"[{shop['name']}] Wix page {page} states no products; "
                   f"catalogue ends there")
             ended_at = page - 1
@@ -2093,7 +2082,9 @@ def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
         print(f"[{shop['name']}] gallery ended at page {ended_at} of "
               f"{pages_total} stated: read {len(items)} of {total}. Either "
               f"the stated total counts products the gallery does not page "
-              f"through, or a page withheld its island")
+              f"through, or a page withheld its island -- a page we never "
+              f"received says TRUNCATED above instead, which is the mistake "
+              f"this note first made")
     print(f"[{shop['name']}] read {len(items)} product(s) from the Wix "
           f"island over {fetched + 1} page(s)")
     return ParsedItems(items, truncated=truncated, pages_read=fetched,
