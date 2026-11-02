@@ -665,6 +665,7 @@ SHOPS = [
         "name": "feralart",
         "platform": "html",
         "url": "https://www.feralartetvin.com",
+        "catalog_paths": ["shop", "champagne", "auction-wines"],
         # One catalogue, not four. /shop's island states `totalCount: 923`
         # beside an `allProductsCategoryId`, so it is the union -- /things,
         # /champagne and /auction-wines are its category filters, and
@@ -674,11 +675,10 @@ SHOPS = [
         # page rather than guessing its way to /champagne-casanova, which is
         # what left this shop reading "zero products found" on every path
         # that answered.
-        "catalog_path": "shop",
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
-        "verified": False,
+        "verified": True,
     },
     {
         "name": "weinfurore",
