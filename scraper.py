@@ -665,6 +665,16 @@ SHOPS = [
         "name": "feralart",
         "platform": "html",
         "url": "https://www.feralartetvin.com",
+        # One catalogue, not four. /shop's island states `totalCount: 923`
+        # beside an `allProductsCategoryId`, so it is the union -- /things,
+        # /champagne and /auction-wines are its category filters, and
+        # configuring them as `catalog_paths` would read slices of a whole we
+        # already have. This is the winenot lesson: look for the union before
+        # configuring a list. It is recorded so the probe reaches the island
+        # page rather than guessing its way to /champagne-casanova, which is
+        # what left this shop reading "zero products found" on every path
+        # that answered.
+        "catalog_path": "shop",
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
@@ -1720,6 +1730,20 @@ def fetch_html(shop, crawler_client):
         if _price_from_detail_pages(shop, items, crawler_client):
             how = how or "detail"
 
+    # Before the document reader, because this one costs no request: the
+    # island is already in the page the walk fetched.
+    if not items and first_html:
+        wix = _fetch_via_wix_island(shop, first_html, first_url, crawler_client)
+        if wix:
+            items, how = list(wix), "wix"
+            # The island walk *is* this shop's catalogue walk, so its pages
+            # and the size it states belong in the coverage row -- page one
+            # was already counted by the walk that fetched the HTML, which is
+            # why only the pages this reader fetched are added.
+            pages_read += wix.pages_read
+            pages_total = wix.pages_total
+            truncated = truncated or wix.truncated
+
     if not items and first_html:
         items = _fetch_via_pdf_list(shop, first_html, first_url, crawler_client)
         how = "pdf" if items else how
@@ -1787,6 +1811,251 @@ def fetch_html(shop, crawler_client):
     return ParsedItems(items, truncated=truncated, pages_read=pages_read,
                        off_catalogue=off_catalogue,
                        pages_total=pages_total if len(starts) == 1 else None)
+
+
+# Wix renders its product grid in the browser from a JSON island, so the
+# served HTML carries the product *links* and no repeated priced structure for
+# autoselect to climb -- which is why feralart probed as "responded and
+# parsed, but zero products found" while its page held 40 currency markers and
+# 25 product links all along. The island is the catalogue, stated better than
+# a grid states it: a numeric price, the currency named, and a real stock flag
+# instead of a French word to guess from. This is the demainlesvins
+# `data-product` lesson in a different costume -- "no grid" is not "no data".
+WIX_PRODUCT_LIST = '"productsWithMetaData":{"list":'
+# The island states the catalogue's size right beside its first page of
+# records -- `"totalCount":923` for the twelve feralart lists -- and that is
+# what says how far to walk. Wix renders its pager in the browser too, so
+# there is no rel="next" for `find_next_page` to follow: a walk waiting for
+# one reads twelve bottles and calls a 923-product catalogue complete. Derived
+# from a fact the page states, exactly as `autoselect.catalogue_size` is,
+# never from a pager URL we guessed at -- and `?page=N` is the shop's own,
+# which titles itself "2/77".
+WIX_TOTAL_COUNT_RE = re.compile(r'"totalCount":\s*(\d+)')
+WIX_TOTAL_WINDOW = 200
+WIX_PAGE_PARAM = "page"
+
+
+def _json_array_at(text, start):
+    """The JSON array beginning at `start`, found by matching brackets.
+
+    A regex cannot do this: product descriptions contain brackets and escaped
+    quotes. Strings are tracked so a `]` inside one does not end the array.
+    """
+    depth, in_string, escaped = 0, False, False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def _wix_list_blob(html):
+    """The island's record array as raw JSON, and the offset it started at.
+
+    Shared by the records and the stated total, because the total is metadata
+    sitting immediately *after* this array and the only safe way to find it is
+    to know where the array ended.
+    """
+    marker = html.find(WIX_PRODUCT_LIST)
+    if marker < 0:
+        return None, -1
+    start = html.find("[", marker + len(WIX_PRODUCT_LIST) - 1)
+    if start < 0:
+        return None, -1
+    return _json_array_at(html, start), start
+
+
+def wix_products(html):
+    """The products a Wix Stores page states in its own JSON island."""
+    blob, _ = _wix_list_blob(html)
+    if blob is None:
+        return []
+    try:
+        records = json.loads(blob)
+    except ValueError:
+        return []
+    return records if isinstance(records, list) else []
+
+
+def wix_catalogue_size(html):
+    """How many products the island says the whole catalogue holds, or None.
+
+    Searched only in the metadata directly following the record array, never
+    across the page: a Wix page carries other counted widgets, and a review
+    or category count read as the catalogue's size would set the length of the
+    walk from a number about something else. `None` is a real answer -- the
+    caller then reads the page in hand and says so, rather than inventing a
+    page count.
+    """
+    blob, start = _wix_list_blob(html)
+    if blob is None:
+        return None
+    end = start + len(blob)
+    match = WIX_TOTAL_COUNT_RE.search(html, end, end + WIX_TOTAL_WINDOW)
+    return int(match.group(1)) if match else None
+
+
+def _wix_items(records, page_url):
+    """Turn island records into listings.
+
+    `text` is the product *name* and nothing else, deliberately. feralart
+    sells books and candles whose blurbs name growers -- its "A Vif - Terroirs
+    en Feu" publication lists "Julie Balagny, L'Arbe Blanc, Labet, Aurelien
+    Lefort" in the description, and matching that would file a book as a
+    bottle of Labet at the book's price. A blog post about Overnoy is not a
+    bottle of Overnoy, and neither is a book about Labet. That filter earns
+    its keep here more than anywhere: 923 of these records are the whole shop,
+    wine and otherwise.
+
+    `price` is the payable figure; Wix puts the struck-through one in
+    `comparePrice`, which is never read -- the price is the one you would pay.
+    """
+    items = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        name = (record.get("name") or "").strip()
+        slug = (record.get("urlPart") or "").strip()
+        if not name or not slug:
+            continue
+        price = record.get("price")
+        price = positive_price(float(price)) if isinstance(
+            price, (int, float)) else None
+        stated = record.get("isInStock")
+        items.append({
+            "text": name,
+            "title": name,
+            "price": price,
+            "url": urljoin(page_url, f"/product-page/{slug}"),
+            "variant_title": "",
+            # The island states stock outright, so there is nothing to infer
+            # from the card's words. Silence is still not "sold out".
+            "in_stock": in_stock(stated if isinstance(stated, bool) else None,
+                                 name),
+        })
+    return items
+
+
+def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
+    """Read a Wix Stores catalogue from its JSON island, and walk its pages.
+
+    Page one costs no request -- the island is in the HTML the catalogue walk
+    just fetched, which is the mistake `_fetch_via_producer_index` was
+    corrected for. The rest of the catalogue does cost requests, and must:
+    feralart's island holds twelve records and states `"totalCount":923`, so
+    reading the page in hand alone is 1.3% of the shop reported as a clean
+    coverage row. Catalogues are paged, and this one says how many pages it
+    has.
+    """
+    records = wix_products(page_html)
+    items = _wix_items(records, page_url)
+    if not items:
+        return ParsedItems()
+
+    total = wix_catalogue_size(page_html)
+    # The real page size, not the usable one: a record we skip for having no
+    # name still occupied a slot on the page, so dividing by the filtered
+    # count would overstate how many pages the catalogue has.
+    per_page = len(records)
+    pages_total = -(-total // per_page) if total and per_page else None
+    print(f"[{shop['name']}] Wix JSON island on {page_url}: "
+          f"{len(items)} listing(s)"
+          + (f" of {total} stated, {pages_total} page(s)"
+             if pages_total else ", no total stated"))
+
+    if pages_total is None:
+        # Not a guess at a second page: an island that states no total is a
+        # page we can read and a catalogue whose size we do not know, and
+        # walking on a hunch would spend requests to learn nothing certain.
+        return ParsedItems(items, pages_read=0, pages_total=None)
+
+    truncated = False
+    last = pages_total
+    if last > MAX_PAGES_PER_SHOP:
+        last = MAX_PAGES_PER_SHOP
+        truncated = True
+        print(f"[{shop['name']}] states {pages_total} page(s), over "
+              f"MAX_PAGES_PER_SHOP ({MAX_PAGES_PER_SHOP}); "
+              f"catalogue TRUNCATED")
+
+    seen = {item["url"] for item in items}
+    fetched = 0
+    # Whether the gallery ran out before the total said it would. That is not
+    # truncation -- nothing stopped us, we reached the end of what the shop
+    # serves -- but it is a gap between what the catalogue claims and what it
+    # hands over, and a gap nobody states is a gap nobody notices.
+    ended_at = None
+    for page in range(2, last + 1):
+        try:
+            resp = crawler_client.get(page_url, params={WIX_PAGE_PARAM: page})
+            fetched += 1
+            resp.raise_for_status()
+        except crawler.UpstreamError as e:
+            # Its own branch above the base class, and deliberately *not*
+            # truncation: a platform ending its catalogue by 404ing the next
+            # paged URL is the catalogue ending, and folding that in would
+            # mark the shop permanently TRUNCATED -- which makes the one cell
+            # that says whether a row is comparable with the shop's real
+            # selection useless.
+            print(f"[{shop['name']}] Wix page {page} answered {e}; "
+                  f"catalogue ends there")
+            ended_at = page - 1
+            break
+        except crawler.FetchError as e:
+            # Everything else that stops a walk early *is* truncation and has
+            # to say so: nine hundred bottles unread must not print a clean
+            # row. The base class, because `get()` raises five things and a
+            # breaker tripping or robots refusing mid-walk ends it just as
+            # surely as the budget does. It never re-raises -- the catalogue
+            # page is already in `items`, and nothing a supplementary reader
+            # does may cost it.
+            print(f"[{shop['name']}] Wix page {page} stopped the walk "
+                  f"({type(e).__name__}: {e}); keeping {len(items)} "
+                  f"listing(s), catalogue TRUNCATED")
+            truncated = True
+            break
+        page_records = wix_products(resp.text)
+        if not page_records:
+            # A page with no island is the end of the gallery, or a page that
+            # rendered nothing. Either way there is nothing after it to read.
+            print(f"[{shop['name']}] Wix page {page} states no products; "
+                  f"catalogue ends there")
+            ended_at = page - 1
+            break
+        fresh = [item for item in _wix_items(page_records, page_url)
+                 if item["url"] not in seen]
+        seen.update(item["url"] for item in fresh)
+        items.extend(fresh)
+
+    if ended_at is not None and ended_at < last:
+        # Said out loud because the alternative is silence over a real
+        # disagreement: either the total is stale -- Wix counts products the
+        # gallery does not paginate -- or a page withheld its island and this
+        # reader stopped on a shop that had more to give. Neither is visible
+        # from a product count alone, and the second one is the island
+        # equivalent of adapter drift.
+        print(f"[{shop['name']}] gallery ended at page {ended_at} of "
+              f"{pages_total} stated: read {len(items)} of {total}. Either "
+              f"the stated total counts products the gallery does not page "
+              f"through, or a page withheld its island")
+    print(f"[{shop['name']}] read {len(items)} product(s) from the Wix "
+          f"island over {fetched + 1} page(s)")
+    return ParsedItems(items, truncated=truncated, pages_read=fetched,
+                       pages_total=pages_total)
 
 
 def _fetch_via_pdf_list(shop, page_html, page_url, crawler_client):

@@ -14,6 +14,9 @@ on:
 
 permissions:
   contents: write
+  # Read-only, and only to ask whether Pages actually published the page this
+  # job just generated. See the last step.
+  actions: read
 
 jobs:
   rebuild:
@@ -68,3 +71,40 @@ jobs:
           done
           echo "Could not push after 3 attempts."
           exit 1
+
+      # Generating the page is not publishing it, and the gap is silent.
+      # wine.html is committed here; GitHub Pages deploys it separately -- and
+      # when a Pages deployment wedges, every later one is refused with
+      # "Deployment request failed ... due to in progress deployment". This
+      # workflow goes on reporting success while the live page stays frozen.
+      # It stayed frozen across four rebuilds on 2026-11-01, and the only
+      # symptom anyone noticed was a button that would not appear.
+      #
+      # This reads the *previous* deployment, because the one for this push
+      # has not started yet. That is the right question anyway: a wedge is a
+      # standing condition, so "is Pages failing right now" is what catches
+      # it -- within one rebuild rather than never.
+      - name: Check GitHub Pages is actually publishing
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Written out rather than nested inside a command substitution:
+          # tests/test_workflows.py reads every expansion and cannot see a
+          # quoted variable through "$( ... )", and the test is right to be
+          # strict about the shape even when this instance is safe.
+          gh api "repos/$REPO/actions/runs?per_page=30" \
+            --jq '[.workflow_runs[]
+                   | select(.name == "pages build and deployment")][0].conclusion' \
+            > "$RUNNER_TEMP/pages-conclusion.txt"
+          # `read` rather than "$(cat ...)": a command substitution wrapping a
+          # quoted variable is the shape the expansion check rejects, and an
+          # empty file would otherwise abort the step under `bash -e`.
+          read -r conclusion < "$RUNNER_TEMP/pages-conclusion.txt" \
+            || conclusion="unknown"
+          echo "Last GitHub Pages deployment concluded: $conclusion"
+          if [ "$conclusion" = "failure" ]; then
+            echo "::error::GitHub Pages is not publishing. The last deployment failed, so the live page is stale however often this workflow succeeds. Re-run the failed 'pages build and deployment' run, or cancel the stuck deployment under Settings -> Pages."
+            exit 1
+          fi

@@ -75,6 +75,14 @@ jobs:
       # ephemeral, so without this every run would look "new" again.
       # actions/cache can be evicted by GitHub at any time; the worst case
       # on a miss is a duplicate alert or an extra fetch, not a broken run.
+      # Two caches, not one, and the split is the point. The state files are
+      # a few hundred KB; `.cache` is ~6.5 MB of fetched pages. Cached
+      # together, the whole entry is evicted together -- and run 41290903522
+      # restored nothing, so the price pool arrived empty and every verdict
+      # rested on one crawl. Losing the HTTP cache costs requests; losing
+      # seen.json costs a month of silence on every bottle it re-alerts, and
+      # the hot pass depends on it outright, since it alerts on URLs absent
+      # from that file.
       - name: Restore scraper state cache
         uses: actions/cache@v4
         with:
@@ -82,10 +90,18 @@ jobs:
             seen.json
             observations.json
             watchlist.json
-            .cache
           key: wine-scraper-state-${{ github.run_id }}
           restore-keys: |
             wine-scraper-state-
+
+      # Pages only. Evictable without consequence beyond extra requests.
+      - name: Restore HTTP cache
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: wine-scraper-httpcache-${{ github.run_id }}
+          restore-keys: |
+            wine-scraper-httpcache-
 
       - name: Run scraper
         env:
