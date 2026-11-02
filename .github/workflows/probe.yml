@@ -35,6 +35,18 @@ on:
         type: boolean
         default: true
 
+# Two probes at once is what produced that conflict: runs 41322696399 and
+# 41322751174 both probed oenovinia within a minute, each saved its own real
+# capture of a page that differs on every request, and the loser died on the
+# rebase with its whole observation lost. The handler above recovers from a
+# race it cannot prevent -- a dashboard rebuild, an apply-config commit --
+# while this stops the one race that is entirely ours to avoid. Not
+# cancel-in-progress: a probe that has already fetched should finish and
+# commit what it saw.
+concurrency:
+  group: wine-probe
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -144,21 +156,42 @@ jobs:
             fi
             echo "Push rejected (attempt $attempt); rebasing onto the branch head."
             if ! git pull --rebase origin "$BRANCH"; then
-              # wine.html is generated, so the only correct resolution is to
-              # regenerate it -- and the dashboard workflow rebuilds it on
-              # main after every push, so the two copies always differ. Probe
-              # run 32268240645 died exactly here, after it had already
-              # fetched and parsed, losing everything it had observed.
-              # Any *other* conflict is real and must still fail loudly.
+              # Everything this job commits is *derived from an observation*,
+              # so a conflict in any of it has one correct resolution and the
+              # run must not be thrown away. Probe run 32268240645 died here
+              # on wine.html after it had already fetched and parsed, losing
+              # everything it had observed; the fix then covered wine.html
+              # alone, and on 2026-11-01 run 41322751174 died the same death
+              # on tests/fixtures/oenovinia.html -- two probes of the same
+              # shop in the same minute, each with its own real capture of a
+              # PrestaShop page that differs on every request. Same failure,
+              # a different generated file.
+              #
+              # wine.html is regenerated. A fixture or a capture is resolved
+              # to *this run's* copy, because the suite above has already
+              # passed against that one: taking main's would commit a fixture
+              # no test in this run ever read. In a rebase the commit being
+              # replayed is --theirs.
+              #
+              # Any conflict outside those paths is real and still fails
+              # loudly -- scraper.py above all, where a shop's platform and
+              # verified flag live.
               conflicts="$(git diff --name-only --diff-filter=U)"
-              if [ "$conflicts" != "wine.html" ]; then
-                echo "Conflicts this cannot resolve: $conflicts"
+              unresolvable="$(echo "$conflicts" | grep -vE '^(wine\.html|tests/fixtures/|probe_pages/)' || true)"
+              if [ -n "$unresolvable" ]; then
+                echo "Conflicts this cannot resolve: $unresolvable"
                 git rebase --abort || true
                 exit 1
               fi
-              echo "Regenerating wine.html to resolve the conflict."
-              python dashboard.py
-              git add wine.html
+              echo "Resolving generated-file conflicts: $conflicts"
+              for f in $conflicts; do
+                if [ "$f" = "wine.html" ]; then
+                  python dashboard.py
+                else
+                  git checkout --theirs -- "$f"
+                fi
+                git add "$f"
+              done
               GIT_EDITOR=true git rebase --continue || exit 1
             fi
             sleep $((attempt * 3))
