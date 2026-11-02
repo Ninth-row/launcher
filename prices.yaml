@@ -25,6 +25,18 @@ producers:
   cuvees: []
   last_verified: null
   verified: false
+  # Watched for the whites only. Absent everywhere else, so no other producer
+  # is affected -- Overnoy's poulsard and the Labet reds still alert.
+  #
+  # This silences a *confirmed* red or rose and nothing else: a label naming
+  # neither a colour nor a grape ("Chalasses Vieilles Vignes 2023") has an
+  # unknown colour and still alerts, flagged, because silencing on absence of
+  # evidence is how a bottle that really is white stops reaching the inbox.
+  # Of the real Ganevat labels in the fixtures this removes exactly two, and
+  # both are unambiguous: `Poulsard "L'Enfant Terrible" 2023` and `Pinot Noir
+  # Les Grands Teppes 2023`.
+  alert_colours:
+  - white
   lines:
     # Stays `domaine`, deliberately, against the argument for flipping it.
     # The curated domaine list holds 12 cuvees and he bottles more, so an
@@ -76,6 +88,17 @@ producers:
       domaine:
         deal_under_750_eur: 80
       negoce_jura:
+        # Silenced on request: the watchlist is the domaine, not the negoce.
+        # All six negoce_jura labels in the fixtures are plainly the negoce
+        # line -- L'eau D'Range, Au Sommet, La Prairie du Haut and its magnum,
+        # Rotagamete Magnum, Sulq Blanc -- every one of them "Anne &
+        # Jean-Francois Ganevat", and all six alerted before this.
+        #
+        # The band stays beside it on purpose. `alert: false` withholds the
+        # email, it does not stop the bottle being priced, so these rows keep
+        # a real verdict in hits.json and keep feeding the observed pool that
+        # the domaine whites are scored against.
+        alert: false
         deal_under_750_eur: 55
       negoce_outside:
         alert: false

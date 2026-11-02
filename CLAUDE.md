@@ -606,6 +606,49 @@ HTTP header or printed.
   A bottle that cannot be placed goes to `negoce_unclassified`, which never
   alerts: an unplaced cuvee is more often negoce-from-outside than not, and
   guessing the band is how the false deals came back.
+  **All three negoce classes are now `alert: false`** -- the watchlist is the
+  domaine, not the negoce (owner, 2026-11-02). `negoce_jura` was the last one
+  still speaking, and all six of its labels in the fixtures are plainly the
+  negoce line: L'eau D'Range, Au Sommet, La Prairie du Haut and its magnum,
+  Rotagamete Magnum, Sulq Blanc, every one of them "Anne & Jean-Francois".
+  Its band stays beside the flag on purpose -- `alert: false` withholds the
+  email, it does not stop the bottle being priced, so these rows keep a real
+  verdict in `hits.json` and keep feeding the observed pool the domaine
+  whites are scored against. A test pins that: dropping silenced bottles from
+  the pool would thin the very data the alerts rest on.
+  `default: domaine` deliberately did **not** flip with it. Suppression here
+  happens on positive evidence -- a curated negoce cuvee, or `anne`/`negoce`
+  on the label -- never on absence of it, for the reason `prices.yaml`
+  already records: a silenced find cannot be recovered, where a wrong band is
+  noise a reader can see through. The residual leak is a negoce cuvee that is
+  neither curated nor labelled "Anne" (`Chardonnay Cuvee de Copains`,
+  `Ganevat Fanfan` both land in `domaine` this way), and the answer to it is
+  the digest note naming unplaced cuvees, not a guess in the config.
+- A producer may be watched for one colour, through `alert_colours` on its
+  pricebook entry, and that filter suppresses only on **positive evidence**.
+  `evaluate.colour_of` returns `white`/`red`/`rose` or `None`, and `None` --
+  the common answer, since plenty of labels name neither a colour nor a grape
+  -- still alerts, flagged. Reading `None` as "not white" is silencing on
+  absence of evidence, which loses a bottle that really was white, and this
+  file treats that as the expensive direction everywhere else.
+  The evidence is read as *phrases first, then single words*, and that order
+  is the whole design. **"Melon a Queue Rouge" is a white Jura grape whose
+  name ends in "rouge"**, so the phrase is matched and removed before any
+  bare colour word is looked for; otherwise a white bottle is silenced, which
+  is the one outcome the filter must never produce. **`pinot` alone decides
+  nothing** -- gris and blanc are white, noir is red -- so there is no bare
+  `pinot` entry. Conflicting evidence returns `None` rather than a guess,
+  while two grapes of the same colour still agree. Vin jaune and
+  Chateau-Chalon are white, so a clavelin still alerts.
+  The grape names are the real signal: these shops write "Poulsard L'Enfant
+  Terrible" far more often than "rouge". Both spellings of poulsard are
+  listed rather than folded through `market.SYNONYMS`, because that table
+  also maps "nature" to "savagnin" -- a shorthand for one bottle that would
+  read every natural-wine label as white.
+  The line verdict is reported ahead of the colour one: `Sulq Blanc` is
+  negoce *and* white, and is silenced for its line. The two gates are
+  independent, and `alert_colours` is absent for every producer but Ganevat,
+  so Overnoy's poulsard and the Labet reds are untouched.
 - Which line a bottle belongs to is decided by the curated cuvee list first,
   the label's attribution second. Shops file negoce cuvees under "Domaine
   Ganevat" often enough that the label is not the last word, and the

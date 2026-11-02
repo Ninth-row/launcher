@@ -19,6 +19,7 @@ import scraper
 
 ALIASES = scraper.PRODUCERS["Ganevat"]
 PRICEBOOK = evaluate.load_pricebook()
+GANEVAT = next(p for p in PRICEBOOK["producers"] if p["name"] == "Ganevat")
 
 
 def hit(title, price, variant=""):
@@ -66,15 +67,29 @@ def test_the_domaine_band_is_eighty():
 
 
 def test_the_jura_negoce_band_is_fifty_five():
-    assert scored("Au Sommet 2021 - Anne & Jean-François Ganevat", 49)["classification"] == "DEAL"
-    assert scored("Au Sommet 2021 - Anne & Jean-François Ganevat", 69)["classification"] == "FAIR"
+    """Asserted through `band_for` rather than through a verdict.
+
+    These bottles no longer alert -- the negoce lines were silenced when the
+    watchlist narrowed to the domaine -- but the band is still computed, still
+    reaches hits.json and still feeds the pool. Pinning the classification
+    pinned the alert policy; the band is the rule, and it is unchanged. Same
+    correction the clavelin test below already carries.
+    """
+    band, _, alertable, _ = evaluate.band_for("negoce_jura", GANEVAT, "Au Sommet 2021")
+
+    assert band == 55
+    assert alertable is False
 
 
 def test_the_negoce_bands_do_not_borrow_each_others_thresholds():
     """A EUR 69 Jura negoce bottle is not a deal, though it would be one
     against the domaine's EUR 80 -- which is precisely the confusion that made
     every cheap Ganevat look like a find."""
-    assert scored("Au Sommet 2021 - Anne & Jean-François Ganevat", 69)["classification"] == "FAIR"
+    negoce, _, _, _ = evaluate.band_for("negoce_jura", GANEVAT, "Au Sommet 2021")
+    domaine, _, _, _ = evaluate.band_for("domaine", GANEVAT, "Chalasses 2023")
+
+    assert negoce < 69 <= domaine
+    # The domaine still speaks, so its half is still asserted end to end.
     assert scored("Chalasses 2023 - Jean-François Ganevat", 69)["classification"] == "DEAL"
 
 
@@ -84,8 +99,11 @@ def test_a_magnum_is_judged_per_bottle_equivalent():
     """EUR 123 for a magnum is EUR 53.50 per 750ml, which is under the Jura
     negoce band. Judging the face price would have called it expensive."""
     result = scored("Rotagamète Magnum - Anne et Jean-François Ganevat", 123)
-    assert result["price_750_eur"] < 55
-    assert result["classification"] == "DEAL"
+    band, _, _, _ = evaluate.band_for("negoce_jura", GANEVAT, "Rotagamète Magnum")
+
+    # The format rule, stated as the arithmetic. The line is silent now, so a
+    # verdict would pin the alert policy instead of the per-750 conversion.
+    assert result["price_750_eur"] < band < 123
 
 
 def test_a_clavelin_is_judged_on_its_per_750_equivalent():
@@ -247,3 +265,163 @@ def test_a_curated_cuvee_still_beats_a_negoce_label():
     result = scored("1 GANEVAT NEGOCE ROUGE DE TOUTE BEAUTE JURA ROUGE", 29)
     assert result["line"] == "negoce_outside"
     assert "cuvee" in result["line_basis"]
+
+
+# --- domaine only, and only the whites ---------------------------------------
+#
+# The watchlist narrowed: alert on Ganevat's domaine bottles, and only on the
+# whites. Both halves are suppression, so both are built to suppress on
+# *positive* evidence only -- a curated negoce cuvee or an "Anne" label for
+# the line, a stated colour or grape for the colour. Absence of evidence
+# alerts, because a bottle wrongly silenced never reaches the inbox at all.
+
+def test_the_negoce_jura_line_no_longer_alerts():
+    """All six negoce_jura labels in the fixtures are "Anne & Jean-Francois",
+    and every one of them alerted before this."""
+    for title in ["L'eau D'Range - Anne & Jean-François Ganevat",
+                  "Au Sommet 2021 - Anne & Jean-François Ganevat",
+                  "La Prairie du Haut 2021 - Anne & Jean-François Ganevat",
+                  "Rotagamète Magnum - Anne et Jean-François Ganevat"]:
+        result = scored(title, 60)
+        assert result["classification"] == "NOALERT", title
+        assert result["alertable"] is False
+
+
+def test_every_negoce_class_is_silent_now():
+    classes = next(p for p in PRICEBOOK["producers"]
+                   if p["name"] == "Ganevat")["lines"]["classes"]
+
+    silent = {name for name, entry in classes.items()
+              if entry.get("alert", True) is False}
+    assert silent == {"negoce_jura", "negoce_outside", "negoce_unclassified"}
+    # The domaine is the one that still speaks.
+    assert classes["domaine"].get("alert", True) is True
+
+
+def test_a_confirmed_red_domaine_bottle_is_silenced_on_colour():
+    """Two real domaine reds were alerting: a poulsard and a pinot noir."""
+    for title in ['Poulsard "L\'Enfant Terrible" 2023 - Jean-François Ganevat',
+                  "Pinot Noir Les Grands Teppes 2023 - Jean-François Ganevat"]:
+        result = scored(title, 90)
+        assert result["colour"] == "red", title
+        assert result["classification"] == "NOALERT"
+        assert "watched for white only" in result["reference_basis"]
+
+
+def test_a_white_domaine_bottle_still_alerts():
+    result = scored("Savagnin Les Rescapés 2021 Magnum - Jean-François Ganevat", 90)
+
+    assert result["colour"] == "white"
+    assert result["classification"] != "NOALERT"
+    assert result["alertable"] is True
+
+
+def test_an_unstated_colour_still_alerts():
+    """"Chalasses Vieilles Vignes" names neither a colour nor a grape. It is
+    white in fact, and nothing on the label says so -- so silencing it would
+    be silencing on absence of evidence, which loses real bottles."""
+    result = scored("Chalasses Vieilles Vignes 2023 - Jean-François Ganevat", 95)
+
+    assert result["colour"] is None
+    assert result["classification"] != "NOALERT"
+
+
+def test_the_line_verdict_is_reported_ahead_of_the_colour_one():
+    """Sulq Blanc is negoce *and* white, so it must be silenced for its line.
+    The two gates are independent and the more specific one speaks."""
+    result = scored("Sulq Blanc - Anne et Jean-François Ganevat", 45)
+
+    assert result["colour"] == "white"
+    assert result["classification"] == "NOALERT"
+    assert "negoce_jura" in result["reference_basis"]
+    assert "watched for" not in result["reference_basis"]
+
+
+def test_no_other_producer_is_filtered_by_colour():
+    """`alert_colours` is Ganevat's alone. A poulsard from a producer without
+    it is still a find -- Overnoy's reds are the obvious case."""
+    entry = {"name": "Someone Else", "region": "jura"}
+
+    assert evaluate.colour_silenced("red", entry) is False
+    assert evaluate.colour_silenced("red", {}) is False
+    # And an unknown colour is never silenced, even where it is configured.
+    assert evaluate.colour_silenced(None, {"alert_colours": ["white"]}) is False
+
+
+def test_a_silenced_bottle_is_kept_not_dropped():
+    """evaluate.py never suppresses a hit. A silenced red still carries its
+    price, so it still reaches hits.json and the observed pool that the
+    whites are scored against."""
+    result = scored("Pinot Noir Les Grands Teppes 2023 - Jean-François Ganevat", 90)
+
+    assert result["price"] == 90.0
+    assert result["price_750_eur"] is not None
+    assert result["title"]
+
+
+# --- reading the colour off a label ------------------------------------------
+
+@pytest.mark.parametrize("title,expected", [
+    ("Poulsard L'Enfant Terrible 2023", "red"),
+    ("Ploussard 2022", "red"),
+    ("Trousseau Les Corvees 2021", "red"),
+    ("Savagnin Les Rescapes 2021", "white"),
+    ("Chardonnay Cuvee de Copains 2019", "white"),
+    ("Cotes du Jura Blanc 2020", "white"),
+    ("Arbois Rouge 2019", "red"),
+    ("Rosé 2023", "rose"),
+    ("Vin Jaune 2012", "white"),
+    ("Château-Chalon 2016", "white"),
+    ("Chalasses Vieilles Vignes 2023", None),
+    ("Côtes du Jura 2021", None),
+])
+def test_colour_is_read_from_the_label(title, expected):
+    assert evaluate.colour_of(title) == expected
+
+
+def test_pinot_alone_decides_nothing():
+    """Gris and blanc are white, noir is red, so the bare grape is no
+    evidence at all -- reading it as red would silence a white bottle."""
+    assert evaluate.colour_of("Pinot 2021") is None
+    assert evaluate.colour_of("Pinot Noir 2021") == "red"
+    assert evaluate.colour_of("Pinot Gris 2021") == "white"
+    assert evaluate.colour_of("Pinot Blanc 2021") == "white"
+
+
+def test_a_grape_whose_name_contains_a_colour_is_not_that_colour():
+    """"Melon a Queue Rouge" is a white Jura grape ending in "rouge". Reading
+    that "rouge" silences a white bottle, which is the one outcome this
+    filter must never produce."""
+    assert evaluate.colour_of("Melon à Queue Rouge 2022") == "white"
+    assert evaluate.colour_of("Ganevat Melon a Queue Rouge") == "white"
+
+
+def test_conflicting_evidence_is_unknown_rather_than_a_guess():
+    assert evaluate.colour_of("Côtes du Jura Rouge Chardonnay") is None
+    # Two reds are still red: agreement is not conflict.
+    assert evaluate.colour_of("Poulsard Trousseau 2021") == "red"
+
+
+def test_a_silenced_bottle_still_feeds_the_reference_pool():
+    """Silencing an alert must not distort the prices the whites are judged
+    against.
+
+    `main()` builds the pool from every evaluated hit and `market.observation`
+    filters on price and producer alone -- never on classification. A negoce
+    or red Ganevat is still real market evidence about what Ganevat costs, so
+    dropping these from the pool would thin the very data the domaine whites
+    are scored with. Pinned because it is exactly the kind of thing a later
+    "we don't alert on these, so why record them" change would remove.
+    """
+    multipliers = {int(k): v for k, v in
+                   PRICEBOOK["defaults"]["format_multipliers"].items()}
+    aliases = market.aliases_by_producer(scraper.PRODUCERS)
+
+    for title in ["Pinot Noir Les Grands Teppes 2023 - Jean-François Ganevat",
+                  "Au Sommet 2021 - Anne & Jean-François Ganevat"]:
+        result = scored(title, 90)
+        assert result["classification"] == "NOALERT", title
+
+        record = market.observation(result, multipliers, aliases)
+        assert record is not None, f"{title} vanished from the pool"
+        assert record["producer"] == "Ganevat"
