@@ -94,12 +94,16 @@ class CannedCrawler:
     crawler when one is supplied, and read empty otherwise.
     """
 
-    def __init__(self, response, platform, live=None, follow_budget=0):
+    def __init__(self, response, platform, live=None, follow_budget=0,
+                 allowance=None):
         self._response = response
         self._empty = crawler.FetchResult(200, EMPTY_PAGE.get(platform, ""))
         self._served = False
         self._live = live
-        self._follow_budget = follow_budget
+        # Shared across one shop's candidates when the caller supplies it;
+        # private to this crawler otherwise, which is what the direct-
+        # construction tests rely on.
+        self._allowance = allowance or FollowAllowance(follow_budget)
         self.request_count = 0
         self.max_requests = 1 + follow_budget
 
@@ -107,8 +111,7 @@ class CannedCrawler:
         if not self._served:
             self._served = True
             return self._response
-        if self._live is not None and self._follow_budget > 0:
-            self._follow_budget -= 1
+        if self._live is not None and self._allowance.take():
             self.request_count += 1
             return self._live.get(url, params=params, max_age=max_age)
         return self._empty
@@ -442,9 +445,37 @@ def candidate_endpoints(shop):
 PROBE_FOLLOW_BUDGET = autoselect.MAX_INDEX_LINKS
 
 
-def try_parse(platform, shop, response, live=None):
+class FollowAllowance:
+    """What one *shop* may spend on follow-up fetches, across every candidate.
+
+    It was per candidate, and that is how one shop spent a whole run. A fresh
+    CannedCrawler is built for each endpoint tried, so a shop whose pages the
+    fetcher wants to walk pays the budget again for every candidate that
+    parses: feralart holds a readable Wix island on five of them, so probe run
+    41461210780 used **150 of 150 requests** on that shop alone and vinnaturel
+    was never reached. It was reported honestly as `not_reached`, but reported
+    is not avoided -- this is the failure MAX_CATALOGUE_GUESSES already exists
+    to prevent, arriving through a different door.
+
+    The number is unchanged. It is the scope that was wrong.
+    """
+
+    def __init__(self, total=PROBE_FOLLOW_BUDGET):
+        self.remaining = total
+
+    def take(self):
+        if self.remaining <= 0:
+            return False
+        self.remaining -= 1
+        return True
+
+
+def try_parse(platform, shop, response, live=None, allowance=None):
     """Run the real fetcher for `platform` against an already-fetched
-    response. Returns (items, error_string)."""
+    response. Returns (items, error_string).
+
+    `allowance` is one shop's follow-up budget, shared across its candidates.
+    """
     probe_shop = dict(shop)
     probe_shop["platform"] = platform
     if platform == "html":
@@ -452,8 +483,10 @@ def try_parse(platform, shop, response, live=None):
         probe_shop.setdefault("title_selector", "h2.product-title")
         probe_shop.setdefault("price_selector", "span.price")
     try:
-        canned = CannedCrawler(response, platform, live=live,
-                               follow_budget=PROBE_FOLLOW_BUDGET if platform == "html" else 0)
+        canned = CannedCrawler(
+            response, platform, live=live,
+            follow_budget=PROBE_FOLLOW_BUDGET if platform == "html" else 0,
+            allowance=allowance if platform == "html" else None)
         items = scraper.FETCHERS[platform](probe_shop, canned)
         return items, None
     except Exception as e:
@@ -497,6 +530,8 @@ def probe_shop(shop, crawler_client, deadline=None):
     # guessed path list knows that a shop calls its catalogue "/la-cave".
     queue = list(candidate_endpoints(shop))
     seen_urls = {c[1] for c in queue}
+    # One allowance for this shop, spent across every candidate it tries.
+    follow_allowance = FollowAllowance()
     followed_menu = False
 
     while queue:
@@ -559,7 +594,9 @@ def probe_shop(shop, crawler_client, deadline=None):
             result["attempts"].append(attempt)
             continue
 
-        items, parse_error = try_parse(platform, shop, response, live=crawler_client)
+        items, parse_error = try_parse(platform, shop, response,
+                                       live=crawler_client,
+                                       allowance=follow_allowance)
 
         if platform == "html" and not followed_menu:
             # Before the "parsed nothing" exits below: a landing page may be

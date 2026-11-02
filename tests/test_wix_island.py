@@ -54,8 +54,18 @@ class _NoFetch:
         raise AssertionError(f"the island reader should not have fetched {url}")
 
 
+# A page the gallery really served that holds no island -- the end of the
+# listing. Deliberately *not* the empty string: an empty body means the page
+# never arrived, which is truncation, and the two must not share a default.
+NO_ISLAND = "<html><body><p>No products</p></body></html>"
+
+
 class _PagedWix:
-    """Serves one island body per `?page=N`, and records what was asked for."""
+    """Serves one island body per `?page=N`, and records what was asked for.
+
+    Pages past the ones given serve `NO_ISLAND`, so a walk that runs off the
+    end reads a real empty gallery rather than a page that failed to arrive.
+    """
 
     def __init__(self, pages, fail_on=None, error=None):
         self.pages = pages
@@ -68,7 +78,7 @@ class _PagedWix:
         self.asked.append(page)
         if page == self.fail_on:
             raise self.error
-        return crawler.FetchResult(200, self.pages.get(page, ""))
+        return crawler.FetchResult(200, self.pages.get(page, NO_ISLAND))
 
 
 # --- the real markup ------------------------------------------------------
@@ -411,3 +421,43 @@ def test_a_gallery_read_to_its_stated_end_reports_no_gap(capsys):
     scraper._fetch_via_wix_island(SHOP, pages[1], PAGE, _PagedWix(pages))
 
     assert "gallery ended" not in capsys.readouterr().out
+
+
+def test_a_blank_body_is_truncation_not_the_end_of_the_catalogue(capsys):
+    """An empty body is a page we did not get.
+
+    Probe run 41461210780 printed "gallery ended at page 21 of 77" for
+    feralart and it was false: /shop?page=22 serves twelve wines and titles
+    itself "22/77". The walk had run out of follow budget and was handed a
+    blank 200, which the reader read as the shop running out -- a confident
+    wrong statement, which this project treats as worse than silence.
+    """
+    pages = {1: _island([{"name": "Wine 1", "urlPart": "wine-1", "price": 20,
+                          "isInStock": True}], total=9),
+             2: ""}
+    client = _PagedWix(pages)
+
+    items = scraper._fetch_via_wix_island(SHOP, pages[1], PAGE, client)
+
+    assert items.truncated, "a page we never received is not a finished walk"
+    assert len(items) == 1
+    out = capsys.readouterr().out
+    assert "came back empty" in out
+    assert "gallery ended" not in out, "reported as the shop running out"
+
+
+def test_a_real_page_with_no_island_still_ends_the_catalogue(capsys):
+    """The other half of the distinction: something *was* served and it held
+    no island, which is the gallery genuinely running out. Marking this
+    truncated would make the one cell that says whether a row is comparable
+    with the shop's real selection useless."""
+    pages = {1: _island([{"name": "Wine 1", "urlPart": "wine-1", "price": 20,
+                          "isInStock": True}], total=9),
+             2: "<html><body><p>Nothing here</p></body></html>"}
+
+    items = scraper._fetch_via_wix_island(SHOP, pages[1], PAGE, _PagedWix(pages))
+
+    assert not items.truncated
+    out = capsys.readouterr().out
+    assert "states no products" in out
+    assert "came back empty" not in out
