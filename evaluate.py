@@ -166,6 +166,107 @@ def derive_cuvee(title, producer_name):
 LINE_UNPLACED_BASIS = "line not classified"
 
 
+# --- colour -----------------------------------------------------------------
+#
+# A producer may be watched for one colour only (Ganevat: the domaine whites),
+# and the label is the only thing that says which. Two kinds of evidence, and
+# the order between them is the whole design: a *phrase* is read before a bare
+# colour word, because a grape name can contain a colour that is not the
+# wine's.
+WHITE, RED, ROSE = "white", "red", "rose"
+
+# Read first, then removed from the text so what they contain is not read
+# again on its own.
+#
+#   "Melon a Queue Rouge" is a white Jura grape whose name ends in "rouge".
+#   Reading that "rouge" silences a white bottle, which is the one outcome
+#   this filter must never produce.
+#
+#   "Pinot" alone decides nothing -- gris and blanc are white, noir is red --
+#   so there is deliberately no bare `pinot` entry below.
+#
+#   Vin jaune and Chateau-Chalon are white, so a clavelin still alerts.
+COLOUR_PHRASES = (
+    ("melon a queue rouge", WHITE),
+    ("queue rouge", WHITE),
+    ("pinot noir", RED),
+    ("pinot gris", WHITE),
+    ("pinot blanc", WHITE),
+    ("vin jaune", WHITE),
+    ("chateau chalon", WHITE),
+)
+
+# Single words, on word boundaries. The grapes are the ones the growers on
+# this watchlist actually bottle, and they are the real signal: these shops
+# write "Poulsard L'Enfant Terrible" far more often than they write "rouge".
+#
+# Both spellings of poulsard are listed rather than folded through
+# market.SYNONYMS, because that table also maps "nature" to "savagnin" -- a
+# shorthand for one bottle that would read every natural-wine label as white.
+COLOUR_WORDS = {
+    "blanc": WHITE, "blanche": WHITE, "white": WHITE, "wit": WHITE,
+    "weiss": WHITE, "bianco": WHITE,
+    "chardonnay": WHITE, "savagnin": WHITE, "chenin": WHITE,
+    "gringet": WHITE, "melon": WHITE, "aligote": WHITE,
+    "rouge": RED, "red": RED, "rood": RED, "rosso": RED,
+    "poulsard": RED, "ploussard": RED, "trousseau": RED, "gamay": RED,
+    "syrah": RED,
+    "rose": ROSE, "rosado": ROSE,
+}
+
+
+def colour_of(text):
+    """"white", "red", "rose", or None when the label does not say.
+
+    `None` is a real answer and the common one -- plenty of labels name
+    neither a colour nor a grape ("Ganevat Cotes du Jura 2021"). A caller must
+    never read it as "not white": silencing on absence of evidence is how a
+    bottle that really is white stops reaching the inbox, and that is the
+    expensive direction here as everywhere else in this codebase.
+
+    Conflicting evidence is also None rather than a guess. A label naming two
+    red grapes is still red; one naming a red and a white is unreadable.
+    """
+    norm = " %s " % re.sub(r"[^a-z0-9]+", " ", normalize(text or ""))
+    found = set()
+    for phrase, colour in COLOUR_PHRASES:
+        if " %s " % phrase in norm:
+            found.add(colour)
+            norm = norm.replace(" %s " % phrase, " ")
+    for word, colour in COLOUR_WORDS.items():
+        if re.search(rf"\b{word}\b", norm):
+            found.add(colour)
+    return found.pop() if len(found) == 1 else None
+
+
+def _never_alerted(result, basis, price750=None):
+    """Classified, kept, and never emailed.
+
+    Shared by both silencing gates -- a line configured `alert: false` and a
+    colour the producer is not watched for. This module never *drops* a hit:
+    the row still reaches hits.json, the coverage table and the market pool,
+    and withholding the email is notify's decision to act on, not this
+    module's to make by deletion.
+    """
+    result.update(
+        tier=None, tier_confidence="n/a", reference_price=None,
+        expected_price=None, ratio=None, classification="NOALERT",
+        reference_basis=basis, reference_shops=[], reference_verified=True,
+        caveat=True, alertable=False, price_750_eur=price750,
+    )
+    return result
+
+
+def colour_silenced(colour, producer_entry):
+    """Whether this producer is watched for colours and this is not one.
+
+    Absent `alert_colours` means every colour alerts, so no other producer is
+    touched by Ganevat's setting. An unknown colour is never silenced.
+    """
+    wanted = (producer_entry or {}).get("alert_colours")
+    return bool(wanted) and colour is not None and colour not in wanted
+
+
 def classify_line(title, producer_entry):
     """(line name, how we know) for this bottle, or (None, None).
 
@@ -306,6 +407,18 @@ def evaluate_hit(hit, pricebook, market_store=None, aliases=None):
 
     reference_verified = bool(producer_entry.get("verified", False))
 
+    # What colour the label says this is, and whether this producer is watched
+    # for it. Recorded on every hit whatever the answer, because a row saying
+    # "colour not stated" is the difference between a white we could not
+    # confirm and one we read as white.
+    colour = colour_of(hit.get("title", ""))
+    result["colour"] = colour
+    colour_blocked = colour_silenced(colour, producer_entry)
+    colour_basis = (f"{producer_entry.get('name') or 'this producer'} is "
+                    f"watched for "
+                    f"{'/'.join(producer_entry.get('alert_colours') or [])} "
+                    f"only; this label says {colour}")
+
     # A configured line replaces the observed reference for this producer, and
     # can silence a line entirely. The hit is still returned and still reaches
     # hits.json and the digest table -- only the alert is withheld, which is
@@ -329,14 +442,14 @@ def evaluate_hit(hit, pricebook, market_store=None, aliases=None):
         # number of bottles has no per-bottle price.
         result["price_750_eur"] = price750
         if not alertable:
-            result.update(
-                tier=None, tier_confidence="n/a", reference_price=None,
-                expected_price=None, ratio=None, classification="NOALERT",
-                reference_basis=f"{line_name} ({line_basis}) is never alerted",
-                reference_shops=[], reference_verified=True, caveat=True,
-                alertable=False, price_750_eur=price750,
-            )
-            return result
+            return _never_alerted(
+                result, f"{line_name} ({line_basis}) is never alerted",
+                price750)
+        # Checked after the line, so a negoce bottle is reported as negoce.
+        # Both gates are real and independent: Sulq Blanc is silenced for its
+        # line and not its colour, because it is white.
+        if colour_blocked:
+            return _never_alerted(result, colour_basis, price750)
         if band is not None and price750 is not None:
             # DEAL stays exactly "under the band": deal_under_750_eur means
             # what it says and a human set that number deliberately, so this
@@ -360,6 +473,12 @@ def evaluate_hit(hit, pricebook, market_store=None, aliases=None):
                 price_750_eur=price750,
             )
             return result
+
+    # The same gate for a hit the line path did not settle -- a producer with
+    # no lines at all, or a banded line with no price to compare. Without it
+    # the filter would hold only for bottles that happened to take the band.
+    if colour_blocked:
+        return _never_alerted(result, colour_basis)
 
     tier = None
     tier_confidence = "n/a"

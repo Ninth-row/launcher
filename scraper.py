@@ -70,6 +70,11 @@ def coverage_row(shop, result=None, status="ok"):
     which still gets a row -- a shop missing from the table entirely is how
     "we never looked" hides."""
     products = result.products_parsed if result is not None else 0
+    # The same comparison the pages cell makes, for a shop that states a
+    # total and no page size: "2149" cannot be held against the shop's real
+    # selection, "2149/2200" can, and says plainly that 51 went unread.
+    products_total = (getattr(result, "products_total", None)
+                      if result is not None else None)
     sold_out = result.out_of_stock if result is not None else 0
     hits = list(result) if result is not None else []
     producers = sorted({h["producer"] for h in hits}
@@ -86,7 +91,11 @@ def coverage_row(shop, result=None, status="ok"):
         "platform": shop["platform"],
         "status": status,
         "pages": pages,
+        # Numeric, always: main() sorts the table by this and
+        # tests/test_coverage.py holds `in_stock + sold_out == products`.
+        # The fraction is composed when the row is rendered.
         "products": products,
+        "products_total": products_total,
         "in_stock": products - sold_out,
         "sold_out": sold_out,
         "hits": len(hits),
@@ -133,12 +142,23 @@ def write_step_summary(table, notes, evaluated):
         fh.write("\n".join(out) + "\n")
 
 
+def _products_cell(row):
+    """"2149" or "2149/2200" -- the same comparison the pages cell makes.
+
+    A shop stating a total but no page size (PrestaShop 1.6's "Il y a 2200
+    produits.") gets no page fraction, so without this its row carries two
+    bare counts and nothing to hold them against.
+    """
+    total = row.get("products_total")
+    return f"{row['products']}/{total}" if total else str(row["products"])
+
+
 def coverage_table(rows):
     """The table as lines of text, aligned, for the log and the email."""
     if not rows:
         return []
     cells = [[r["shop"], r["platform"], r["status"], r.get("pages", "-"),
-              str(r["products"]), str(r["in_stock"]), str(r["sold_out"]),
+              _products_cell(r), str(r["in_stock"]), str(r["sold_out"]),
               str(r["hits"]), ", ".join(r["producers"]) or "-"] for r in rows]
     widths = [max(len(c[i]) for c in [COVERAGE_COLUMNS] + cells)
               for i in range(len(COVERAGE_COLUMNS))]
@@ -1518,6 +1538,13 @@ def _walk_pages(shop, crawler_client, start, pages_left, seen_urls, max_age=None
     walk_seen = set()
     first_html, truncated, fetched = "", False, 0
     stated_pages = None
+    # What the catalogue says it holds, when it states a total but no page
+    # size. PrestaShop 1.6 writes "Il y a 2200 produits." and nothing about
+    # pages, so there is no page count to bound the walk with -- but the
+    # number still turns "2149 products" into "2149 of 2200", which is the
+    # difference between a row that can be compared with the shop's real
+    # selection and one that cannot.
+    stated_products = None
 
     page = 0
     while page < pages_left:
@@ -1586,11 +1613,20 @@ def _walk_pages(shop, crawler_client, start, pages_left, seen_urls, max_age=None
             # already here. A shop that overstates its pager cannot make the
             # walk longer than the net above.
             size = autoselect.catalogue_size(resp.text)
+            if size and size[0]:
+                stated_products = size[0]
             if size and size[2]:
                 stated_pages = min(size[2], pages_left)
                 if size[0]:
                     print(f"[{shop['name']}] {start} states {size[0]} product(s) "
                           f"over {size[2]} page(s)")
+            elif stated_products:
+                # Said out loud on its own, because this is the case with no
+                # page count: without the line, a shop stating a total we
+                # cannot turn into pages reports exactly as one that stated
+                # nothing.
+                print(f"[{shop['name']}] {start} states {stated_products} "
+                      f"product(s) and no page size")
         page_items, how = _parse_html_page(shop, resp.text, page_url)
         # Two different questions, and conflating them abandoned catalogues
         # half-read. "Is there anything new on this page" was asked against
@@ -1628,7 +1664,8 @@ def _walk_pages(shop, crawler_client, start, pages_left, seen_urls, max_age=None
               f"catalogue TRUNCATED")
         truncated = True
 
-    return fetched, truncated, items, first_html, how, stated_pages
+    return (fetched, truncated, items, first_html, how, stated_pages,
+            stated_products)
 
 
 def fetch_html(shop, crawler_client):
@@ -1643,6 +1680,7 @@ def fetch_html(shop, crawler_client):
     items, seen_urls, how = [], set(), None
     first_html, first_url, truncated = "", starts[0], False
     pages_total = None
+    products_total = None
     # A budget per catalogue rather than one shared across all of them. Sharing
     # it meant winenot spent every page on its first categories and never once
     # read its rose, sparkling, moelleux or mute; each category states its own
@@ -1682,7 +1720,7 @@ def fetch_html(shop, crawler_client):
     if new_path:
         new_url = _shop_url(shop, new_path)
         try:
-            _, _, new_items, _, new_how, _ = _walk_pages(
+            _, _, new_items, _, new_how, _, _ = _walk_pages(
                 shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
                 max_age=crawler.FRESH_PAGE_TTL_SECONDS)
         except (crawler.FetchError, EmptyResponseError) as e:
@@ -1704,8 +1742,8 @@ def fetch_html(shop, crawler_client):
     for start in starts:
         try:
             (fetched, page_truncated, page_items, page_html, page_how,
-             stated) = _walk_pages(shop, crawler_client, start,
-                                   MAX_PAGES_PER_SHOP, seen_urls)
+             stated, stated_items) = _walk_pages(
+                 shop, crawler_client, start, MAX_PAGES_PER_SHOP, seen_urls)
         except (crawler.FetchError, EmptyResponseError) as e:
             failed_starts += 1
             if failed_starts == len(starts):
@@ -1717,6 +1755,8 @@ def fetch_html(shop, crawler_client):
         pages_read += fetched
         if stated:
             pages_total = (pages_total or 0) + stated
+        if stated_items:
+            products_total = (products_total or 0) + stated_items
         truncated = truncated or page_truncated
         items.extend(page_items)
         how = how or page_how
@@ -1810,7 +1850,9 @@ def fetch_html(shop, crawler_client):
     # shortfall that is not there.
     return ParsedItems(items, truncated=truncated, pages_read=pages_read,
                        off_catalogue=off_catalogue,
-                       pages_total=pages_total if len(starts) == 1 else None)
+                       pages_total=pages_total if len(starts) == 1 else None,
+                       products_total=(products_total if len(starts) == 1
+                                       else None))
 
 
 # Wix renders its product grid in the browser from a JSON island, so the
@@ -2148,7 +2190,7 @@ def fetch_hot(shop, crawler_client):
         return fetch_shopify(shop, crawler_client,
                              max_age=crawler.FRESH_PAGE_TTL_SECONDS)
     new_url = _shop_url(shop, shop["new_arrivals"])
-    fetched, truncated, items, _, _, _ = _walk_pages(
+    fetched, truncated, items, _, _, _, _ = _walk_pages(
         shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
         max_age=crawler.FRESH_PAGE_TTL_SECONDS)
     return ParsedItems(items, truncated=truncated, pages_read=fetched)
@@ -2166,7 +2208,7 @@ class ParsedItems(list):
     """
 
     def __init__(self, items=(), truncated=False, pages_read=0, pages_total=None,
-                 off_catalogue=0):
+                 off_catalogue=0, products_total=None):
         super().__init__(items)
         self.truncated = truncated
         # Listings the new-arrivals strip had and the catalogue did not. A
@@ -2178,6 +2220,10 @@ class ParsedItems(list):
         # pages -- the count alone cannot tell a complete read from a slice.
         self.pages_read = pages_read
         self.pages_total = pages_total
+        # What the catalogue said it holds, when it stated a total but no page
+        # size and so produced no page fraction. Same job as pages_total: turn
+        # a bare count into a comparison.
+        self.products_total = products_total
 
 
 class ShopResult(list):
@@ -2204,7 +2250,7 @@ class ShopResult(list):
 
     def __init__(self, hits=(), products_parsed=0, sold_out=(), near_tokens=(),
                  truncated=False, out_of_stock=0, pages_read=0, pages_total=None,
-                 off_catalogue=0):
+                 off_catalogue=0, products_total=None):
         super().__init__(hits)
         self.products_parsed = products_parsed
         self.sold_out = list(sold_out)
@@ -2219,6 +2265,7 @@ class ShopResult(list):
         self.out_of_stock = out_of_stock
         self.pages_read = pages_read
         self.pages_total = pages_total
+        self.products_total = products_total
         self.off_catalogue = off_catalogue
 
 
@@ -2289,6 +2336,7 @@ def check_shop(shop, crawler_client, fetch=None):
                       out_of_stock=skipped,
                       pages_read=getattr(items, "pages_read", 0),
                       pages_total=getattr(items, "pages_total", None),
+                      products_total=getattr(items, "products_total", None),
                       off_catalogue=getattr(items, "off_catalogue", 0))
 
 

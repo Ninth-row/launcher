@@ -943,3 +943,22 @@ def test_a_scoped_alias_never_mutates_the_producer_table():
     scraper.matched_aliases(PACK, "winenot")
     assert list(scraper.PRODUCERS["Overnoy/Houillon"]) == before["Overnoy/Houillon"]
     assert "overnoy" not in scraper.PRODUCERS["Overnoy/Houillon"]
+
+
+def test_every_producer_matches_its_own_name():
+    """A producer whose aliases do not match its own name is invisible.
+
+    Asserted as a rule rather than against today's list, because the issue
+    form adds producers and `probe.py --apply` changes shops: a test naming
+    particular estates turns the next legitimate edit into a CI failure.
+
+    This is the shape that catches a bad entry -- `"Domaine Foo": ["bar"]`
+    -- which the near-miss note cannot, since that note only looks at
+    producers which matched nothing and one that matches nothing because its
+    alias is wrong looks exactly like one nobody stocks.
+    """
+    missed = {name: scraper.matched_aliases(name)
+              for name in scraper.PRODUCERS
+              if name not in scraper.matched_aliases(name)}
+
+    assert not missed, f"aliases do not match their own producer name: {missed}"

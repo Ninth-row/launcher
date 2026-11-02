@@ -448,6 +448,50 @@ HTTP header or printed.
   outranks the claim. vinnouveau's sold-out cards were
   held up by the French words beside them alone, and a restyle would have
   taken that shop silently to zero.
+- **A shop that hides its sold-out stock reads as all-in-stock, and is right
+  to.** oenovinia reports 2149 products and **zero** sold out, and its markup
+  carries winenot's exact signature: 49 cards, 49 `schema.org/InStock`, no
+  `OutOfStock`, no French sold-out vocabulary, and an enabled
+  `ajax_add_to_cart_button` on every one -- so the buy-button guard cannot
+  fire either, because it needs *some and not others*. That row is honest:
+  the shop simply does not list what it cannot sell (confirmed by the owner,
+  2026-11-02). Nothing in a catalogue page distinguishes the two kinds of
+  shop; `af_oos_behaviour value="3"` is a hint and a hint is not evidence. So
+  "every card claims InStock" is damning only where the shop also *shows*
+  sold-out bottles, and a zero in the SOLD OUT column is a question to ask
+  the owner rather than a defect to fix. It is also the reason the absence
+  machinery exists: where sold-out stock is hidden, a bottle selling out is a
+  **disappearance**, so the restock alert there runs through `last_seen_at` /
+  `ABSENT_DAYS` and `_came_back` instead of through the sold-out split.
+  Do **not** read that page's `quantity:` field as stock, however much it
+  looks like it. The page embeds a Google Analytics `item_list` payload whose
+  records carry `quantity:0` on 24 of 50 -- but only **1 of those 50 ids
+  appears among the 49 cards** (GA ids run 606-1864, the cards'
+  `data-id-product` run 10007-10448), and its `item_list_name` values are
+  `Bordeaux`, `Champagne`, `Bourgogne`, naming wines like "Carruades de
+  Lafite 2009" that are not on page one of "Tous les vins". It describes a
+  different product set, so reading it attaches one product's stock to
+  another -- the wrong-page error this file already records three times.
+- A catalogue that states a total but no page size still gets a comparison.
+  PrestaShop 1.6 heads its category with `Il y a 2200 produits.` and says
+  nothing about pages, so there is no page count to bound the walk with --
+  and oenovinia therefore printed a bare `44` in the PAGES cell with no total
+  anywhere, while reading 2149 of a stated 2200. The 51 it missed were
+  invisible. `autoselect.COUNTED_TOTAL` reads that heading and the PRODUCTS
+  cell renders `2149/2200`, which is the same comparison the pages fraction
+  makes and the only one such a row can carry.
+  Two things are load-bearing. The total is **reported, never used to bound
+  the walk**: a page count derived from however many products happened to
+  parse on page one is weaker evidence than one the shop stated, and reading
+  it low cuts a catalogue in half. And the pattern must refuse the cart --
+  the same page says `Il y a 0 produits dans votre panier.` and `Il y a 1
+  produit dans votre panier.`, both *before* the real counter in document
+  order, so unanchored it reads the cart and calls a 2200-wine catalogue zero
+  or one page long. A cart total is not a catalogue total, exactly as a
+  cart's "0,00 EUR" is not a price. `coverage_row` also keeps `products`
+  numeric and composes the fraction at render time: `main()` sorts the table
+  by that field, so a string there is a `TypeError` that takes down every run
+  which read such a shop.
 - The price is the one you would pay. PrestaShop renders a discounted card
   old-price-first ("Prix de base 13,50 € -10% Prix 12,15 €"), so taking the
   first currency-adjacent number recorded 13,50 -- 9 of pangee's 36 committed
@@ -562,6 +606,49 @@ HTTP header or printed.
   A bottle that cannot be placed goes to `negoce_unclassified`, which never
   alerts: an unplaced cuvee is more often negoce-from-outside than not, and
   guessing the band is how the false deals came back.
+  **All three negoce classes are now `alert: false`** -- the watchlist is the
+  domaine, not the negoce (owner, 2026-11-02). `negoce_jura` was the last one
+  still speaking, and all six of its labels in the fixtures are plainly the
+  negoce line: L'eau D'Range, Au Sommet, La Prairie du Haut and its magnum,
+  Rotagamete Magnum, Sulq Blanc, every one of them "Anne & Jean-Francois".
+  Its band stays beside the flag on purpose -- `alert: false` withholds the
+  email, it does not stop the bottle being priced, so these rows keep a real
+  verdict in `hits.json` and keep feeding the observed pool the domaine
+  whites are scored against. A test pins that: dropping silenced bottles from
+  the pool would thin the very data the alerts rest on.
+  `default: domaine` deliberately did **not** flip with it. Suppression here
+  happens on positive evidence -- a curated negoce cuvee, or `anne`/`negoce`
+  on the label -- never on absence of it, for the reason `prices.yaml`
+  already records: a silenced find cannot be recovered, where a wrong band is
+  noise a reader can see through. The residual leak is a negoce cuvee that is
+  neither curated nor labelled "Anne" (`Chardonnay Cuvee de Copains`,
+  `Ganevat Fanfan` both land in `domaine` this way), and the answer to it is
+  the digest note naming unplaced cuvees, not a guess in the config.
+- A producer may be watched for one colour, through `alert_colours` on its
+  pricebook entry, and that filter suppresses only on **positive evidence**.
+  `evaluate.colour_of` returns `white`/`red`/`rose` or `None`, and `None` --
+  the common answer, since plenty of labels name neither a colour nor a grape
+  -- still alerts, flagged. Reading `None` as "not white" is silencing on
+  absence of evidence, which loses a bottle that really was white, and this
+  file treats that as the expensive direction everywhere else.
+  The evidence is read as *phrases first, then single words*, and that order
+  is the whole design. **"Melon a Queue Rouge" is a white Jura grape whose
+  name ends in "rouge"**, so the phrase is matched and removed before any
+  bare colour word is looked for; otherwise a white bottle is silenced, which
+  is the one outcome the filter must never produce. **`pinot` alone decides
+  nothing** -- gris and blanc are white, noir is red -- so there is no bare
+  `pinot` entry. Conflicting evidence returns `None` rather than a guess,
+  while two grapes of the same colour still agree. Vin jaune and
+  Chateau-Chalon are white, so a clavelin still alerts.
+  The grape names are the real signal: these shops write "Poulsard L'Enfant
+  Terrible" far more often than "rouge". Both spellings of poulsard are
+  listed rather than folded through `market.SYNONYMS`, because that table
+  also maps "nature" to "savagnin" -- a shorthand for one bottle that would
+  read every natural-wine label as white.
+  The line verdict is reported ahead of the colour one: `Sulq Blanc` is
+  negoce *and* white, and is silenced for its line. The two gates are
+  independent, and `alert_colours` is absent for every producer but Ganevat,
+  so Overnoy's poulsard and the Labet reds are untouched.
 - Which line a bottle belongs to is decided by the curated cuvee list first,
   the label's attribution second. Shops file negoce cuvees under "Domaine
   Ganevat" often enough that the label is not the last word, and the

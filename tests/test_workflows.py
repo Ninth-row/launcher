@@ -215,3 +215,52 @@ def test_an_unauthorised_form_is_refused_out_loud():
     assert "createComment" in steps[0]["with"]["script"]
     reporter = next(s for s in steps if s.get("name") == "Report failure on the issue")
     assert "steps.authz.outcome != 'failure'" in reporter["if"]
+
+
+# --- the probe must not throw away what it has already observed ------------
+#
+# Probe run 32268240645 died on a wine.html rebase conflict after it had
+# fetched and parsed, losing every observation; the fix covered wine.html
+# alone. On 2026-11-01 run 41322751174 died the same death on
+# tests/fixtures/oenovinia.html -- two probes of one shop in the same minute,
+# each holding its own real capture of a page that differs per request. Same
+# failure, different generated file. Everything this job commits other than
+# scraper.py is derived from an observation and has one correct resolution.
+
+PROBE = Path(__file__).parent.parent / ".github" / "workflows" / "probe.yml"
+
+RECOVERABLE = ["wine.html", "tests/fixtures/", "probe_pages/"]
+
+
+@pytest.mark.parametrize("path", RECOVERABLE)
+def test_the_probe_can_resolve_a_conflict_in_what_it_generates(path):
+    body = PROBE.read_text()
+    assert path in body, (
+        f"{path} is committed by the probe and generated from an observation, "
+        "so a rebase conflict there must be resolvable -- otherwise a run "
+        "that already fetched and parsed exits 1 and loses everything"
+    )
+
+
+def test_the_probe_still_fails_loudly_on_a_real_conflict():
+    """scraper.py holds each shop's platform and verified flag. A conflict
+    there is a genuine disagreement about config and must never be
+    auto-resolved to either side."""
+    body = PROBE.read_text()
+
+    guard = re.search(r"unresolvable=.*", body)
+    assert guard, "the conflict guard is gone"
+    assert "scraper.py" not in guard.group(0)
+    # The run still dies on anything outside the generated set.
+    assert "git rebase --abort" in body and "exit 1" in body
+
+
+def test_the_probe_does_not_race_itself():
+    """Two concurrent probes of the same shop is what caused the conflict in
+    the first place, and that race is entirely ours to avoid. A probe that
+    has already fetched must still be allowed to finish, so the group must
+    not cancel in progress."""
+    spec = yaml.safe_load(PROBE.read_text())
+
+    assert spec.get("concurrency", {}).get("group")
+    assert spec["concurrency"].get("cancel-in-progress") is False

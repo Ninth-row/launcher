@@ -593,6 +593,20 @@ COUNTED = (
     re.compile(r"affichage\s+\d+\s*[-–]\s*(\d+)\s+de\s+(\d+)", re.I),
     re.compile(r"\b\d+\s*[-–]\s*(\d+)\s+(?:de|of|van)\s+(\d+)\s+r[eé]sultat", re.I),
 )
+# A third idiom states the total and says nothing about the page size:
+# PrestaShop 1.6's category heading, "Il y a 2200 produits." oenovinia reads
+# 2149 over 44 pages and printed a bare `44` with no total beside it, so the
+# one cell that says whether a row can be compared with the shop's real
+# selection said nothing at all, and a 51-wine shortfall was invisible.
+#
+# The negative lookahead is the whole of it, because the *same page* says
+# "Il y a 0 produits dans votre panier." and "Il y a 1 produit dans votre
+# panier." -- the cart widget, twice, and both before the real counter in
+# document order. Unanchored, this pattern reads the cart and calls a
+# 2200-wine catalogue zero or one page long. A cart total is not a catalogue
+# total, the same way a cart's "0,00 EUR" is not a price.
+COUNTED_TOTAL = re.compile(
+    r"il\s+y\s+a\s+(\d+)\s+produits?\b(?!\s+dans\s+votre\s+panier)", re.I)
 LAST_PAGE_LINK = (re.compile(r"[?&]page=(\d+)"), re.compile(r"/page/(\d+)"))
 # Three distinct page numbers means the pager is listing a range rather than
 # just pointing at the next one.
@@ -613,6 +627,12 @@ def catalogue_size(html):
         if match:
             per_page, total = int(match.group(1)), int(match.group(2))
             break
+    if total is None:
+        # A total with no page size. Reported, never used to bound the walk:
+        # see the `pages` return below.
+        match = COUNTED_TOTAL.search(text)
+        if match and int(match.group(1)):
+            total = int(match.group(1))
 
     # The highest page a pager links is only the *last* page when the pager
     # lists a range. A minimal pager links "next" and nothing else, so its
@@ -627,6 +647,13 @@ def catalogue_size(html):
     if total and per_page:
         pages = -(-total // per_page)          # ceil
         return total, per_page, max(pages, linked)
+    if total:
+        # The shop stated how much it holds but not how much fits on a page,
+        # so there is no page count to give -- and the caller must not invent
+        # one from the size of the page it happens to have, because that
+        # number bounds the walk and reading it low cuts a catalogue in half.
+        # The total alone still turns "2149 products" into "2149 of 2200".
+        return total, None, linked or None
     if linked:
         return None, None, linked
     # Unknown, which is not the same as one page: the walk goes on following
