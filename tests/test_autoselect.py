@@ -1500,3 +1500,64 @@ def test_a_carousel_showing_three_wines_twice_does_not_beat_the_grid():
     assert not any("corton" in u for u in urls), \
         "the carousel was read instead of the grid"
     assert items[0]["price"] == 290.0
+
+
+# --- how big does the catalogue say it is ---------------------------------
+#
+# oenovinia read 2149 products over 44 pages and printed a bare `44` with no
+# total anywhere, so the one cell that says whether a row can be compared
+# with the shop's real selection said nothing, and a 51-wine shortfall was
+# invisible. Its page states the size outright; nothing was reading it.
+
+OENOVINIA = (pathlib.Path(__file__).parent / "fixtures" / "oenovinia.html")
+
+
+def test_a_prestashop_heading_counter_states_the_catalogue_size():
+    total, per_page, pages = autoselect.catalogue_size(OENOVINIA.read_text())
+
+    assert total == 2200
+    # It states a total and nothing about page size, so there is no page
+    # count -- and that matters, because the caller uses the page count to
+    # bound the walk and a number we invented there cuts a catalogue short.
+    assert per_page is None
+    assert pages is None
+
+
+@pytest.mark.parametrize("cart", [
+    "Il y a 1 produit dans votre panier.",
+    "Il y a 0 produits dans votre panier.",
+    "Il y a 12 produits dans votre panier.",
+])
+def test_the_cart_widget_is_not_the_catalogue_counter(cart):
+    """The trap is on the real page, twice, and before the real counter.
+
+    Unanchored, the pattern reads the cart: a 2200-wine catalogue becomes one
+    page long, or zero. A cart total is not a catalogue total, the same way a
+    cart's "0,00 EUR" is not a price.
+    """
+    assert autoselect.catalogue_size(
+        f"<html><body><p>{cart}</p></body></html>") is None
+
+
+def test_the_counter_wins_even_though_the_cart_comes_first():
+    html = ("<html><body>"
+            "<p>Il y a 0 produits dans votre panier.</p>"
+            "<p>Il y a 1 produit dans votre panier.</p>"
+            '<h1><span class="heading-counter">Il y a 2200 produits.</span></h1>'
+            "</body></html>")
+
+    assert autoselect.catalogue_size(html)[0] == 2200
+
+
+def test_the_counted_idioms_still_read():
+    """Regression guard: the total-only reader must not shadow these."""
+    presta = "<html><body><p>Affichage 1-24 de 2827 article(s)</p></body></html>"
+    assert autoselect.catalogue_size(presta)[:2] == (2827, 24)
+
+    woo = "<html><body><p>1-10 de 315 resultats</p></body></html>"
+    assert autoselect.catalogue_size(woo)[:2] == (315, 10)
+
+
+def test_a_page_stating_nothing_still_states_nothing():
+    assert autoselect.catalogue_size(
+        "<html><body><p>Nos vins</p></body></html>") is None

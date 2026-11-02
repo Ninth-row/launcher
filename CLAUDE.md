@@ -448,6 +448,50 @@ HTTP header or printed.
   outranks the claim. vinnouveau's sold-out cards were
   held up by the French words beside them alone, and a restyle would have
   taken that shop silently to zero.
+- **A shop that hides its sold-out stock reads as all-in-stock, and is right
+  to.** oenovinia reports 2149 products and **zero** sold out, and its markup
+  carries winenot's exact signature: 49 cards, 49 `schema.org/InStock`, no
+  `OutOfStock`, no French sold-out vocabulary, and an enabled
+  `ajax_add_to_cart_button` on every one -- so the buy-button guard cannot
+  fire either, because it needs *some and not others*. That row is honest:
+  the shop simply does not list what it cannot sell (confirmed by the owner,
+  2026-11-02). Nothing in a catalogue page distinguishes the two kinds of
+  shop; `af_oos_behaviour value="3"` is a hint and a hint is not evidence. So
+  "every card claims InStock" is damning only where the shop also *shows*
+  sold-out bottles, and a zero in the SOLD OUT column is a question to ask
+  the owner rather than a defect to fix. It is also the reason the absence
+  machinery exists: where sold-out stock is hidden, a bottle selling out is a
+  **disappearance**, so the restock alert there runs through `last_seen_at` /
+  `ABSENT_DAYS` and `_came_back` instead of through the sold-out split.
+  Do **not** read that page's `quantity:` field as stock, however much it
+  looks like it. The page embeds a Google Analytics `item_list` payload whose
+  records carry `quantity:0` on 24 of 50 -- but only **1 of those 50 ids
+  appears among the 49 cards** (GA ids run 606-1864, the cards'
+  `data-id-product` run 10007-10448), and its `item_list_name` values are
+  `Bordeaux`, `Champagne`, `Bourgogne`, naming wines like "Carruades de
+  Lafite 2009" that are not on page one of "Tous les vins". It describes a
+  different product set, so reading it attaches one product's stock to
+  another -- the wrong-page error this file already records three times.
+- A catalogue that states a total but no page size still gets a comparison.
+  PrestaShop 1.6 heads its category with `Il y a 2200 produits.` and says
+  nothing about pages, so there is no page count to bound the walk with --
+  and oenovinia therefore printed a bare `44` in the PAGES cell with no total
+  anywhere, while reading 2149 of a stated 2200. The 51 it missed were
+  invisible. `autoselect.COUNTED_TOTAL` reads that heading and the PRODUCTS
+  cell renders `2149/2200`, which is the same comparison the pages fraction
+  makes and the only one such a row can carry.
+  Two things are load-bearing. The total is **reported, never used to bound
+  the walk**: a page count derived from however many products happened to
+  parse on page one is weaker evidence than one the shop stated, and reading
+  it low cuts a catalogue in half. And the pattern must refuse the cart --
+  the same page says `Il y a 0 produits dans votre panier.` and `Il y a 1
+  produit dans votre panier.`, both *before* the real counter in document
+  order, so unanchored it reads the cart and calls a 2200-wine catalogue zero
+  or one page long. A cart total is not a catalogue total, exactly as a
+  cart's "0,00 EUR" is not a price. `coverage_row` also keeps `products`
+  numeric and composes the fraction at render time: `main()` sorts the table
+  by that field, so a string there is a `TypeError` that takes down every run
+  which read such a shop.
 - The price is the one you would pay. PrestaShop renders a discounted card
   old-price-first ("Prix de base 13,50 € -10% Prix 12,15 €"), so taking the
   first currency-adjacent number recorded 13,50 -- 9 of pangee's 36 committed

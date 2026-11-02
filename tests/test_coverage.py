@@ -538,3 +538,49 @@ def test_a_multi_catalogue_shop_shows_no_misleading_fraction():
         [], products_parsed=8, pages_read=items.pages_read,
         pages_total=items.pages_total))
     assert row["pages"] == "2"
+
+
+def test_a_stated_product_total_renders_as_a_fraction():
+    """"2149" cannot be held against a shop's real selection; "2149/2200"
+    can, and says plainly that 51 went unread. oenovinia states a total and
+    no page size, so this is the only comparison its row can carry."""
+    row = scraper.coverage_row(
+        {"name": "oenovinia", "platform": "html"},
+        scraper.ShopResult([], products_parsed=2149, products_total=2200,
+                           pages_read=44))
+
+    # The stored field stays numeric: main() sorts the table by it and the
+    # in_stock + sold_out invariant below is arithmetic.
+    assert row["products"] == 2149
+    assert row["products_total"] == 2200
+    assert row["in_stock"] + row["sold_out"] == row["products"]
+    assert isinstance(row["products"], int)
+
+    body = "\n".join(scraper.coverage_table([row]))
+    assert "2149/2200" in body
+
+
+def test_a_shop_stating_no_total_still_renders_a_bare_count():
+    row = scraper.coverage_row(
+        {"name": "zzz-html", "platform": "html"},
+        scraper.ShopResult([], products_parsed=12, pages_read=1))
+
+    assert row["products_total"] is None
+    cell = scraper._products_cell(row)
+    assert cell == "12" and "/" not in cell
+
+
+def test_the_table_sorts_by_products_with_a_stated_total_present():
+    """The sort reads `products`, so a stated total must not turn it into a
+    string -- `-"2149/2200"` is a TypeError that would take down every run
+    that read such a shop."""
+    rows = [
+        scraper.coverage_row({"name": "big", "platform": "html"},
+                             scraper.ShopResult([], products_parsed=2149,
+                                                products_total=2200)),
+        scraper.coverage_row({"name": "small", "platform": "html"},
+                             scraper.ShopResult([], products_parsed=12)),
+    ]
+
+    assert [r["shop"] for r in sorted(rows, key=lambda r: -r["products"])] == \
+        ["big", "small"]
