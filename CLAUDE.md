@@ -237,7 +237,7 @@ ignoring the Overnoy-Crinquand two lines up --
 `tests/fixtures/purewijnen-growers-excerpt.html` keeps that real markup as a
 namesake test -- but the link leads to prose.)
 
-Four remain unverified, and all four now have a tested reason:
+Three remain unverified, and all three have a tested reason:
   - **weinfurore** was added through the issue form on 2026-11-01 (issue #25)
     and probed the same day: **HTTP 403, three times, then the circuit
     breaker** (run 41308647379). That is a refusal, and it is answered the way
@@ -254,25 +254,6 @@ Four remain unverified, and all four now have a tested reason:
     documented 403 is a fact with a date on it rather than a permanent
     property, so this is worth re-probing occasionally -- but it is not worth
     working around;
-  - **feralart** is Wix, and "responded and parsed, but zero products found"
-    was wrong about it in the way vinovivo and demainlesvins were wrong.
-    `probe_pages/feralart.www-feralartetvin-com.shop.html` holds 40 currency
-    markers and 25 `/product-page/` links, and a JSON island stating **12
-    products with numeric prices, EUR, `isInStock` and a slug each** -- beside
-    `"totalCount":923`. Wix renders its grid in the browser from that island,
-    so there is no repeated priced structure for `autoselect` to climb.
-    `_fetch_via_wix_island` reads it and walks it: twelve records is **1.3% of
-    923**, none of the twelve is a producer we watch, and a reader that
-    stopped there would have printed a clean coverage row over a shop it had
-    barely opened. How far to walk comes from the total the island states --
-    77 pages at twelve a page, confirmed against the shop's own
-    `/shop?page=2`, which serves twelve different wines and titles itself
-    "2/77". That `totalCount` sits beside an `allProductsCategoryId`, which
-    settles what looked like a `catalog_paths` question: `/shop` **is** the
-    union, and `/things`, `/champagne` and `/auction-wines` are its category
-    filters, so configuring them would read slices of a whole already in hand.
-    It stocks Tom Gauditiabois. It is still unverified only because `probe.py
-    --apply` is the one thing that may verify a shop -- run it;
   - **cuvee3000** answers every path — `/`, `/en`, `/en/wines`, `/fr`, and
     `/vins.php`, which cannot exist — with the same ~1.3KB of title,
     `<noscript>` and one `<script>`: no anchor, no meta-refresh, and a body
@@ -351,6 +332,26 @@ own Stock column reads 0 against **707** of them, every Richard Leroy and the
 Pierre Overnoy among them. `pdflist` now reads that column, the running header
 and the "Page n sur 84" footer; `tests/fixtures/wineshopbiarritz-list-excerpt.txt`
 keeps the real rows. Read a shop's columns, not just its rows.
+
+**feralart** is the Wix shop, verified by probe run 41461210780 after
+"responded and parsed, but zero products found" turned out to be wrong about
+it in the way vinovivo and demainlesvins were wrong. Its `/shop` holds 40
+currency markers, 25 `/product-page/` links and a JSON island stating
+`"totalCount":923`; Wix renders the grid in the browser, so there is no
+repeated priced structure for `autoselect` to climb and
+`_fetch_via_wix_island` reads the island instead. That `totalCount` sits
+beside an `allProductsCategoryId`, which is what settles `/shop` as the union
+rather than one of several `catalog_paths`.
+
+What it actually reads is now measured, by run 41494484832: **600 products
+over 52 pages**, `TRUNCATED` on `BudgetExceeded` at page 51 of a stated 77,
+231 of them sold out -- and **0 producers we watch**. That last number is
+open, not answered. The shop does stock Tom Gauditiabois, so he is presumably
+among the 323 that went unread, and the naturavin question -- is a shop that
+stocks nothing we hunt worth a row in the coverage table -- cannot be asked
+until one run reads it to the end. At roughly 77 requests against a 450
+budget it is among the three dearest shops on the list, so that is a real
+question rather than a formality.
 
 `crawler.Challenged` exists because a shop can answer HTTP 200 with a bot
 challenge rather than its catalogue: **vinnaturel.fr** served "One moment,
@@ -1331,12 +1332,38 @@ HTTP header or printed.
   41461210780 spent **150 of 150 requests** on it and vinnaturel was never
   reached. Reported honestly as `not_reached`, which is not the same as
   avoided. `FollowAllowance` is created once in `probe_shop` and shared by
-  every candidate; the number did not change, the scope did.
-  Both plumbing points need their own test, and the first attempt proved it:
-  a test that constructs `CannedCrawler` with an allowance directly passes
-  happily while `probe_shop` hands out a fresh one per candidate. One test
-  drives `try_parse`, another drives `probe_shop`, and each was checked by
-  reintroducing the defect it covers.
+  every candidate.
+  **A ceiling without a reservation is the same failure a level down, and
+  shipping one without the other was a live defect for one commit.** Spent
+  first-come-first-served, the first candidate that walks takes everything and
+  every later one is read page-one-only -- which starves the producer-index
+  route of the follows it exists for, since a candidate reached after
+  exhaustion follows *zero* grower links and reports "zero products found":
+  the leszinzinsduvin failure this budget was added to prevent. So the shop
+  has a ceiling (`PROBE_FOLLOW_BUDGET_PER_SHOP`) and each candidate draws a
+  reservation from it (`FollowAllowance.for_candidate`).
+  Both plumbing points need their own test, and two attempts proved it: a test
+  that constructs `CannedCrawler` with an allowance directly passes happily
+  while `probe_shop` hands out a fresh one per candidate, and a test that
+  hands `_html_rank` a ready-made `paginates` cannot see where it is derived.
+  Every one of these was checked by reintroducing the defect it covers, which
+  is the only way to know a test is load-bearing.
+- **A candidate is ranked on the size it states, not on how much of it we
+  could afford to read.** `paginates` comes from
+  `autoselect.find_next_page`, and a Wix gallery publishes no "next" link at
+  all because it renders its pager in the browser -- so every Wix candidate
+  ranked `(False, len(items))`, the comparison collapsed to the item count
+  alone, and that count is a function of how much follow budget was left when
+  that candidate's turn came. The `catalog_path` recorded under `--apply` was
+  therefore chosen by fetch order. `_html_rank` prefers the page's own
+  `wix_catalogue_size`, which costs nothing and does not move: probe run
+  41461210780 read islands on five feralart candidates stating 923, 923, 129,
+  42 and 16, and ranked on that `/shop` wins, which is the union and the right
+  answer. A stated total also means the thing paginates, whatever
+  `find_next_page` saw, or a 77-page catalogue loses its first rank element to
+  any strip that happened to link a second page. A page that states nothing
+  still ranks on what it parsed, which is what every non-Wix shop has always
+  used.
 - The repo is public, so issue forms are untrusted input. `apply_issue.py`
   must keep rejecting quote/backslash injection, non-https URLs and unsafe
   shop names, and `apply-config.yml` must keep gating on the author's *real*

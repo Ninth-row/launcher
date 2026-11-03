@@ -2019,7 +2019,6 @@ def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
     for page in range(2, last + 1):
         try:
             resp = crawler_client.get(page_url, params={WIX_PAGE_PARAM: page})
-            fetched += 1
             resp.raise_for_status()
         except crawler.UpstreamError as e:
             # Its own branch above the base class, and deliberately *not*
@@ -2058,6 +2057,12 @@ def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
                   f"finished")
             truncated = True
             break
+        # Counted here and not at the `get` above: a page that 404'd or came
+        # back blank produced nothing, and `pages_read` means pages read. It
+        # was incremented on the fetch, so a walk stopped by either of those
+        # claimed one more page than arrived -- which contradicts the whole
+        # point of the blank-body branch above.
+        fetched += 1
         page_records = wix_products(resp.text)
         if not page_records:
             # A real page that states no products *is* the end of the gallery:
