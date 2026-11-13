@@ -807,6 +807,52 @@ HTTP header or printed.
   available alerts on bottles nobody can buy, then writes them to `seen.json`
   and silences the restock. This failure suppresses finds rather than adding
   noise, so nothing reports it: the shop simply looks quiet.
+- **"Some and not others" cannot rescue a small page, and a grower page is
+  always small.** A grower we watch is allocated two or three cuvees, so
+  their page holds two or three cards -- and when every one of them is
+  buyable nothing is disabled, the guard above cannot fire, and the
+  decoration condemns the page. That is not a hypothesis:
+  `tests/fixtures/leszinzinsduvin-grower-labet.html` is a captured Labet page
+  whose two cards each carry an enabled button and `<option> 1 </option>` in
+  the quantity select -- Chercheurs d'or 2009 at EUR 110, Cuvee du hasard
+  2018 at EUR 130, both on the shelf -- and both read sold out. Labet is
+  watched, so that was a find suppressed in silence, every run, and it is
+  what the shop's permanent `0 in stock | 14 sold out` row and Tom
+  Gauditiabois's place in "sold out everywhere" were actually made of.
+  A page cannot settle this, so the shop does: `stock_from_markup` on a SHOPS
+  entry says this shop's card *text* never states stock, so the text is not
+  read there at all and each card is judged on its markup alone -- the
+  `-outOfStock` class (one level in, which is why `_marked_sold_out` reads
+  descendants under the flag and only under it) and the disabled buy control.
+  Three things keep the trade honest. It is **per shop and set from captured
+  bytes**, because "a sold-out word here is furniture" is a fact about one
+  theme: asserting it where it is false alerts on bottles nobody can buy. The
+  deep class read stays behind the flag, because a theme shipping a hidden
+  sold-out badge in every card would otherwise go silently to zero -- the
+  same failure, one level down. And it must not flip an all-gone page to
+  available: Alice Fahrenkrug's three 2025s
+  (`tests/fixtures/leszinzinsduvin-grower-fahrenkrug.html`) each carry
+  `-outOfStock`, an empty select and a disabled button, and a test pins that
+  they stay gone.
+- **A shop whose newest arrivals are on its landing page gets `""` as its
+  `new_arrivals` path**, and `hot_surface` therefore tests for the key's
+  *presence*, not its truthiness. Read as falsy, leszinzinsduvin -- whose
+  cards are literally `novelties__card` and which has nothing else crawlable
+  -- had no hourly cover at all, and on 2026-11-13 three Fahrenkrug 2025s at
+  EUR 38 were listed and sold out inside one afternoon, in a seven-hour gap
+  between two full passes that only hot passes covered. The strip being the
+  same page as the catalogue is not waste: the strip is read at
+  `FRESH_PAGE_TTL_SECONDS`, and a 6h cached copy of a shop's one listing is
+  itself a way to miss a drop.
+- A producer whose own page was found, fetched and parsed to zero is named in
+  the digest (`Own page found and listing nothing`), beside "watched but
+  found nowhere" rather than instead of it. Both are true, and only together
+  do they separate an alias that matches nothing from a grower page that is
+  empty today -- which is the difference between a config bug and a page to
+  go and look at. It was a `print` for days, naming Alice Fahrenkrug on the
+  afternoon she dropped, while the inbox heard nothing. `ParsedItems` and
+  `ShopResult` carry it out by the same list-subclass route everything else
+  about a fetch travels.
 - A listing that is sold out is not a find. Stock comes from the platform
   when it answers (`available` on a Shopify variant, `is_in_stock` on the
   WooCommerce Store API) and from the listing text otherwise ("epuise",

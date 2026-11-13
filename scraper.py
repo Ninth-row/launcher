@@ -405,10 +405,25 @@ SHOPS = [
         # loses the other half, so the landing page is the catalogue and the
         # index is declared separately. Selectors below are the generic
         # placeholders and are expected to miss; autoselect reads the listing.
+        #
+        # Its card text never states stock. "Produit epuise" ships inside
+        # every card and is revealed with CSS -- 4 cards, 4 of those
+        # messages, 2 buyable, in one captured page -- so stock is read from
+        # the markup alone (`stock_from_markup`): `novelties__cart
+        # -outOfStock` with an empty quantity select and a disabled button.
+        #
+        # The landing page is also where a release appears (its cards are
+        # literally `novelties__card`), and it is the catalogue, so
+        # `new_arrivals` is the empty path: the same page, re-read fresh.
+        # That is the point rather than a duplicate -- a 6h cached copy of
+        # this shop's one listing is how a drop goes unseen -- and it is what
+        # gives the shop a hot surface, which it had none of.
         "name": "leszinzinsduvin",
         "platform": "html",
         "url": "https://www.leszinzinsduvin.com",
         "producer_index": "domaines.php",
+        "new_arrivals": "",
+        "stock_from_markup": True,
         "item_selector": "div.product",
         "title_selector": "h2.product-title",
         "price_selector": "span.price",
@@ -1158,13 +1173,17 @@ def _parse_html_page(shop, html, page_url, min_blocks=None):
             # Only ever to state "gone": silence from a theme is not a promise
             # that a bottle is on the shelf, which is why this can set False
             # and never True.
-            **({"in_stock": False} if autoselect.markup_says_sold_out(node) else {}),
+            **({"in_stock": False}
+               if autoselect._marked_sold_out(
+                   node, deep=shop.get("stock_from_markup", False))
+               else {}),
         })
     if items:
         return items, "selectors"
 
     return autoselect.find_products(
-        html, page_url, PRICE_PATTERN, parse_price, min_blocks=min_blocks), "auto"
+        html, page_url, PRICE_PATTERN, parse_price, min_blocks=min_blocks,
+        stock_from_markup=shop.get("stock_from_markup", False)), "auto"
 
 
 # How many product pages one run will open to price a listing that hid its
@@ -1272,7 +1291,7 @@ def _fetch_via_producer_index(shop, index_html, index_url, crawler_client):
     # the one just parsed, so the index was never actually read.
     targets = autoselect.find_producer_links(index_html, index_url, match_producers)
     if not targets:
-        return []
+        return ParsedItems()
 
     items, empty = [], []
     for producer, url in targets[:autoselect.MAX_INDEX_LINKS]:
@@ -1300,7 +1319,12 @@ def _fetch_via_producer_index(shop, index_html, index_url, crawler_client):
     print(f"[{shop['name']}] no crawlable catalogue; followed {followed} producer "
           f"page(s) from the index, {len(empty)} listing nothing{empty_note}; "
           f"read {len(items)} product(s), {in_stock} in stock")
-    return items
+    # Carried out rather than only printed. A producer whose own page was
+    # found, fetched and read to zero is a different fact from "watched but
+    # found nowhere" -- it names the page to go and look at -- and this line
+    # sat in every run's log for days naming Alice Fahrenkrug while the inbox
+    # heard nothing at all.
+    return ParsedItems(items, empty_producers=sorted(set(empty)))
 
 
 def _shop_url(shop, path):
@@ -1692,7 +1716,7 @@ def fetch_html(shop, crawler_client):
     # from the log, which is the exact silence this project exists to remove.
     new_items, new_how, new_url, new_read = [], None, None, False
     new_path = shop.get("new_arrivals")
-    if new_path:
+    if new_path is not None:
         new_url = _shop_url(shop, new_path)
         try:
             _, _, new_items, _, new_how, _, _ = _walk_pages(
@@ -1763,8 +1787,12 @@ def fetch_html(shop, crawler_client):
         items = _fetch_via_pdf_list(shop, first_html, first_url, crawler_client)
         how = "pdf" if items else how
 
+    # Survives the merges below: `_add_unseen` returns a plain list, and the
+    # one ParsedItems this function returns is built at the end.
+    empty_producers = []
     if not items and first_html:
         items = _fetch_via_producer_index(shop, first_html, first_url, crawler_client)
+        empty_producers = list(getattr(items, "empty_producers", ()))
         how = "index" if items else how
 
     # A shop can have both, and then reading only one loses half the range.
@@ -1788,11 +1816,10 @@ def fetch_html(shop, crawler_client):
             # anything that reaches here escaping instead discards it.
             index = None
         if index is not None:
-            items, how, added = _add_unseen(
-                items,
-                _fetch_via_producer_index(
-                    shop, index.text, index_url, crawler_client),
-                how, "index")
+            from_index = _fetch_via_producer_index(
+                shop, index.text, index_url, crawler_client)
+            empty_producers = list(getattr(from_index, "empty_producers", ()))
+            items, how, added = _add_unseen(items, from_index, how, "index")
             if added:
                 print(f"[{shop['name']}] producer index added {added} "
                       f"listing(s) the catalogue did not have")
@@ -1825,6 +1852,7 @@ def fetch_html(shop, crawler_client):
     # shortfall that is not there.
     return ParsedItems(items, truncated=truncated, pages_read=pages_read,
                        off_catalogue=off_catalogue,
+                       empty_producers=empty_producers,
                        pages_total=pages_total if len(starts) == 1 else None,
                        products_total=(products_total if len(starts) == 1
                                        else None))
@@ -2169,7 +2197,11 @@ def hot_surface(shop):
     """
     if shop["platform"] == "shopify":
         return True
-    return bool(shop.get("new_arrivals"))
+    # Presence, not truthiness: "" is a real path -- the shop's own landing
+    # page -- and leszinzinsduvin puts its newest arrivals there and nowhere
+    # else crawlable. Read as falsy, that shop keeps the hourly cover it has
+    # never had.
+    return shop.get("new_arrivals") is not None
 
 
 def fetch_hot(shop, crawler_client):
@@ -2204,9 +2236,13 @@ class ParsedItems(list):
     """
 
     def __init__(self, items=(), truncated=False, pages_read=0, pages_total=None,
-                 off_catalogue=0, products_total=None):
+                 off_catalogue=0, products_total=None, empty_producers=()):
         super().__init__(items)
         self.truncated = truncated
+        # Watched producers whose own page the producer index pointed at, and
+        # which parsed to nothing. Not a hit, not a sold-out row, and not an
+        # alias problem -- a page to go and read.
+        self.empty_producers = list(empty_producers)
         # Listings the new-arrivals strip had and the catalogue did not. A
         # configured catalogue that is a subset of the shop says nothing about
         # it, so this number is the only way that shows up.
@@ -2246,8 +2282,9 @@ class ShopResult(list):
 
     def __init__(self, hits=(), products_parsed=0, sold_out=(), near_tokens=(),
                  truncated=False, out_of_stock=0, pages_read=0, pages_total=None,
-                 off_catalogue=0, products_total=None):
+                 off_catalogue=0, products_total=None, empty_producers=()):
         super().__init__(hits)
+        self.empty_producers = list(empty_producers)
         self.products_parsed = products_parsed
         self.sold_out = list(sold_out)
         self.near_tokens = set(near_tokens)
@@ -2327,6 +2364,7 @@ def check_shop(shop, crawler_client, fetch=None):
     if skipped:
         print(f"[{shop['name']}] skipped {skipped} sold-out listing(s)")
     return ShopResult(hits, products_parsed=len(items),
+                      empty_producers=getattr(items, "empty_producers", ()),
                       sold_out=sold_out, near_tokens=near_tokens,
                       truncated=getattr(items, "truncated", False),
                       out_of_stock=skipped,
@@ -2370,6 +2408,8 @@ def main():
               f"at a {crawler.FRESH_PAGE_TTL_SECONDS:.0f}s cache TTL.")
 
     started = time.monotonic()
+    empty_pages = []
+
     def absorb(shop, hits):
         """Everything a successful read contributes to the run.
 
@@ -2387,6 +2427,12 @@ def main():
         # a shop we are reading incompletely, and only this number says so. In
         # the log alone it stayed invisible for weeks while two in-stock packs
         # went unfetched, so it reaches the digest.
+        # A watched producer whose own page the grower index pointed at, and
+        # which parsed to nothing. "Watched but found nowhere" is true of such
+        # a producer and reads as an alias defect; this says the page was
+        # found and read, and names it, which is the actionable half.
+        for producer in hits.empty_producers:
+            empty_pages.append(f"{producer} [{shop['name']}]")
         if hits.off_catalogue:
             off_catalogue_shops.append(
                 f"{shop['name']}: {hits.off_catalogue} listing(s) on new "
@@ -2602,6 +2648,9 @@ def main():
               f"{', '.join(sold_out_only)}")
     if unseen and not HOT:
         print(f"{unseen_title} ({len(unseen)}): {', '.join(unseen)}")
+    if empty_pages:
+        print(f"Own page found and listing nothing ({len(empty_pages)}): "
+              f"{', '.join(empty_pages)}")
     misses = [] if HOT else near_misses(unseen, near_corpus)
     if misses:
         print(f"Alias near-misses ({len(misses)}): {'; '.join(misses)}")
@@ -2726,6 +2775,10 @@ def main():
         "Refused us -- not retried": refused_shops,
         "Matched but sold out everywhere": sold_out_only,
         unseen_title: unseen,
+        # Said beside "found nowhere" rather than instead of it: both are
+        # true, and only together do they distinguish an alias that matches
+        # nothing from a grower page that is empty today.
+        "Own page found and listing nothing": empty_pages,
         "Shops not reached this run": [s["name"] for s in unreached],
         "Reference pool": lost_pool,
         "Cuvees priced by a default band, needing a line": unplaced,

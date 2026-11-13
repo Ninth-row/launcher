@@ -6,7 +6,10 @@ hand-rolled PHP whose product URLs look like
 case that motivated the module: nine shops serve HTML like this and match
 none of the generic div.product guesses in SHOPS.
 """
+from pathlib import Path
+
 import pytest
+from bs4 import BeautifulSoup
 
 import autoselect
 import scraper
@@ -1561,3 +1564,83 @@ def test_the_counted_idioms_still_read():
 def test_a_page_stating_nothing_still_states_nothing():
     assert autoselect.catalogue_size(
         "<html><body><p>Nos vins</p></body></html>") is None
+
+
+# --- A shop whose card text never states stock -------------------------------
+#
+# leszinzinsduvin ships "Produit epuise" inside *every* card and reveals it
+# with CSS. The cross-card guard in _stock_reader handles that on a page where
+# some card is demonstrably buyable and some is not, and cannot handle it at
+# all on a small page -- which is every grower page, because a grower we watch
+# is allocated two or three cuvees. These three cases are the three shapes,
+# all of them captured bytes.
+LZD_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _lzd_items(name):
+    shop = next(s for s in scraper.SHOPS if s["name"] == "leszinzinsduvin")
+    html = (LZD_FIXTURES / name).read_text()
+    items, _ = scraper._parse_html_page(
+        shop, html, "https://www.leszinzinsduvin.com/x.html", min_blocks=1)
+    return items
+
+
+def test_every_card_buyable_is_not_a_sold_out_page():
+    """The defect this flag exists for, on the bytes that proved it.
+
+    Both cards on the captured Labet grower page carry an enabled buy button
+    and `<option> 1 </option>` in the quantity select -- a Chercheurs d'or at
+    EUR 110 and a Cuvee du hasard at EUR 130, on the shelf -- and nothing is
+    disabled, so "some and not others" cannot fire and the decoration used to
+    condemn the page. Labet is a watched producer, so this was a find being
+    suppressed, every run, in silence.
+    """
+    items = _lzd_items("leszinzinsduvin-grower-labet.html")
+    assert len(items) == 2
+    assert [i["in_stock"] for i in items] == [True, True]
+
+
+def test_every_card_marked_gone_stays_gone():
+    """The flag must not flip an all-sold-out page to available.
+
+    Alice Fahrenkrug's three 2025s, captured hours after they dropped: each
+    card carries `novelties__cart -outOfStock`, an empty quantity select and a
+    disabled button. Reading these as buyable would alert on bottles nobody
+    can buy and then write them to seen.json, silencing the restock.
+    """
+    items = _lzd_items("leszinzinsduvin-grower-fahrenkrug.html")
+    assert len(items) == 3
+    assert [i["in_stock"] for i in items] == [False, False, False]
+
+
+def test_mixed_page_reads_each_card_from_its_own_markup():
+    items = _lzd_items("leszinzinsduvin-landing.html")
+    assert len(items) == 4
+    assert sum(1 for i in items if i["in_stock"]) == 3
+    gone = [i for i in items if not i["in_stock"]]
+    assert [i["stock_basis"] for i in gone] == ["markup"]
+
+
+def test_descendant_sold_out_class_is_only_read_for_such_a_shop():
+    """A hidden sold-out badge in every card must not take a shop to zero.
+
+    The deep class read is what lets `-outOfStock`, one level inside the
+    card, be seen at all -- and it is exactly the shape that would silence a
+    whole catalogue if it were on for every shop. So it is asserted through
+    the reader with a shop that does *not* carry the flag, not against the
+    helper's own default: the question is what the plumbing passes.
+    """
+    html = "<div class='grid'>" + "".join(
+        f"<div class='card'><a href='/w{n}'>Wine {n}</a>"
+        f"<span class='out-of-stock'></span>"
+        f"<span class='price'>1{n},00 \u20ac</span></div>" for n in (1, 2, 3)
+    ) + "</div>"
+    plain = {**next(s for s in scraper.SHOPS if s["name"] == "leszinzinsduvin")}
+    plain.pop("stock_from_markup")
+    items, _ = scraper._parse_html_page(plain, html, "https://x.test/")
+    assert len(items) == 3
+    assert [i["in_stock"] for i in items] == [True, True, True]
+
+    flagged = {**plain, "stock_from_markup": True}
+    items, _ = scraper._parse_html_page(flagged, html, "https://x.test/")
+    assert [i["in_stock"] for i in items] == [False, False, False]

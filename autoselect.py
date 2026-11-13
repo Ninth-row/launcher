@@ -357,7 +357,8 @@ def _is_price_filter(block, price_pattern):
     return bool(words) and all(word in FILTER_LABELS for word in words)
 
 
-def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
+def find_products(html, base_url, price_pattern, parse_price, min_blocks=None,
+                  stock_from_markup=False):
     """Return [{text, title, price, url, variant_title}], or [] if the page
     has no repeated priced structure to read."""
     min_blocks = MIN_BLOCKS if min_blocks is None else min_blocks
@@ -428,7 +429,7 @@ def find_products(html, base_url, price_pattern, parse_price, min_blocks=None):
         return []
 
     items, seen = [], set()
-    read_stock = _stock_reader(best)
+    read_stock = _stock_reader(best, stock_from_markup=stock_from_markup)
     for block in best:
         anchor = _product_link(block)
         if anchor is None:
@@ -806,7 +807,33 @@ def _claims_in_stock(block):
     return False
 
 
-def _stock_reader(blocks):
+def _marked_sold_out(block, deep=False):
+    """markup_says_sold_out, optionally reading a *descendant's* class too.
+
+    markup_says_sold_out judges the card's own class list, which is right
+    everywhere it is used by default. leszinzinsduvin states stock one level
+    in: the card is always `novelties__card`, and the sold-out one holds
+    `<div class="novelties__cart -outOfStock">` with an empty quantity select
+    and a disabled button. Reading descendants is confined to shops carrying
+    `stock_from_markup`, because a theme that ships a hidden sold-out badge in
+    *every* card would otherwise go silently to zero -- which is the failure
+    this whole path exists to undo, and it must not be reintroduced one level
+    down.
+    """
+    if markup_says_sold_out(block):
+        return True
+    if not deep:
+        return False
+    for el in block.find_all(True):
+        classes = el.get("class") or []
+        classes = [classes] if isinstance(classes, str) else classes
+        if any(re.sub(r"[^a-z0-9]", "", c.lower()) in OUT_OF_STOCK_TOKENS
+               for c in classes):
+            return True
+    return False
+
+
+def _stock_reader(blocks, stock_from_markup=False):
     """Return in_stock(block), deciding how this page states stock.
 
     Normally the text decides: "epuise", "rupture de stock", "sold out".
@@ -824,6 +851,21 @@ def _stock_reader(blocks):
     top to bottom, and calling that page available would alert on bottles
     nobody can buy and then write them to seen.json, silencing the restock
     that is the point of watching them.
+
+    `stock_from_markup` is the shop saying that its card text never states
+    stock at all, so the text is not read here. "Some and not others" cannot
+    rescue a *small* page: a grower we watch is allocated two or three
+    cuvees, so their page holds two or three cards, and when every one of
+    them is buyable nothing is disabled and the guard cannot fire -- the
+    decoration then condemns the page. That is not hypothetical.
+    tests/fixtures/leszinzinsduvin-grower-labet.html is a captured grower
+    page whose two cards each carry an enabled button and `<option> 1
+    </option>` in the quantity select, and both read sold out: a Labet
+    Chercheurs d'or at EUR 110 and a Cuvee du hasard at EUR 130, on the
+    shelf, reported gone. The flag is per shop and set from captured bytes
+    because the thing it asserts -- that a sold-out word in a card is
+    furniture -- is a fact about one theme, and asserting it wrongly
+    elsewhere would alert on bottles nobody can buy.
     """
     text_says, disabled, claims = {}, {}, {}
     for block in blocks:
@@ -858,6 +900,14 @@ def _stock_reader(blocks):
 
     def read(block):
         """(in_stock, basis). basis is how we know, or "none" if we do not."""
+        if stock_from_markup:
+            # Per card, and with no cross-card comparison: at such a shop the
+            # marked class and the disabled control are the only statements
+            # made, so an unmarked card with a live buy control is the shop
+            # offering to sell the bottle.
+            if _marked_sold_out(block, deep=True) or disabled[id(block)]:
+                return False, "markup"
+            return True, "buy button"
         if markup_says_sold_out(block):
             return False, "markup"
         if trust_buttons:

@@ -139,3 +139,17 @@ def test_the_full_pass_still_says_all_of_it(pipeline, capsys):
 
     assert "empty response" in out
     assert "found nowhere" in out
+
+
+def test_the_landing_page_counts_as_a_recency_surface():
+    """An empty new_arrivals path means the shop's own landing page.
+
+    leszinzinsduvin puts its newest arrivals there -- its cards are literally
+    `novelties__card` -- and has nothing else crawlable, so read as falsy that
+    shop gets no hourly cover at all. Three of Alice Fahrenkrug's 2025s were
+    listed and sold out inside one afternoon, between two full passes, with
+    only hot passes in between and this shop in none of them.
+    """
+    assert scraper.hot_surface({"platform": "html", "new_arrivals": ""})
+    assert not scraper.hot_surface({"platform": "html"})
+    assert scraper._shop_url({"url": "https://x.test"}, "") == "https://x.test/"
