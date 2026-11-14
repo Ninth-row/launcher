@@ -461,3 +461,39 @@ def test_a_real_page_with_no_island_still_ends_the_catalogue(capsys):
     out = capsys.readouterr().out
     assert "states no products" in out
     assert "came back empty" not in out
+
+
+def test_a_page_that_never_arrived_is_not_counted_as_read(capsys):
+    """`pages_read` means pages read.
+
+    The counter sat on the fetch, so a walk stopped by a blank body or a 404
+    claimed one more page than arrived -- and the coverage row is built from
+    that number. It also contradicted the branch right beside it, whose whole
+    point is that a blank body means the page was not read.
+    """
+    first = _island([{"name": "Wine 1", "urlPart": "wine-1", "price": 20,
+                      "isInStock": True}], total=9)
+
+    blank = scraper._fetch_via_wix_island(
+        SHOP, first, PAGE, _PagedWix({1: first, 2: ""}))
+    assert blank.truncated
+    assert blank.pages_read == 0, "a blank page was counted as read"
+    assert "over 1 page(s)" in capsys.readouterr().out
+
+    missing = scraper._fetch_via_wix_island(
+        SHOP, first, PAGE,
+        _PagedWix({1: first}, fail_on=2,
+                  error=crawler.UpstreamError("HTTP 404", status_code=404)))
+    assert missing.pages_read == 0, "a 404 was counted as read"
+
+
+def test_a_page_that_did_arrive_is_counted(capsys):
+    pages = {n: _island([{"name": f"Wine {n}", "urlPart": f"wine-{n}",
+                          "price": 20, "isInStock": True}], total=3)
+             for n in range(1, 4)}
+
+    items = scraper._fetch_via_wix_island(SHOP, pages[1], PAGE, _PagedWix(pages))
+
+    # Page one came from the catalogue walk; this reader fetched two more.
+    assert items.pages_read == 2
+    assert "over 3 page(s)" in capsys.readouterr().out

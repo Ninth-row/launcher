@@ -445,29 +445,93 @@ def candidate_endpoints(shop):
 PROBE_FOLLOW_BUDGET = autoselect.MAX_INDEX_LINKS
 
 
+# A shop may try a dozen endpoints, and it must not be able to spend a run.
+# Three candidates' worth is enough for the index route and the islands to
+# each get a real look while still bounding the shop.
+PROBE_FOLLOW_BUDGET_PER_SHOP = PROBE_FOLLOW_BUDGET * 3
+
+
 class FollowAllowance:
-    """What one *shop* may spend on follow-up fetches, across every candidate.
+    """What a shop may spend on follow-up fetches, and what any one candidate
+    may take of it.
 
-    It was per candidate, and that is how one shop spent a whole run. A fresh
+    **Both halves are load-bearing, and shipping one without the other traded
+    one failure for the same failure a level down.**
+
+    Per candidate alone is how one shop spent a whole run: a fresh
     CannedCrawler is built for each endpoint tried, so a shop whose pages the
-    fetcher wants to walk pays the budget again for every candidate that
-    parses: feralart holds a readable Wix island on five of them, so probe run
-    41461210780 used **150 of 150 requests** on that shop alone and vinnaturel
-    was never reached. It was reported honestly as `not_reached`, but reported
-    is not avoided -- this is the failure MAX_CATALOGUE_GUESSES already exists
-    to prevent, arriving through a different door.
+    fetcher wants to walk paid the budget again on every candidate that
+    parses. feralart holds a readable Wix island on five of them, so probe run
+    41461210780 used **150 of 150 requests** on that shop and vinnaturel was
+    never reached -- the failure MAX_CATALOGUE_GUESSES exists to prevent,
+    through a different door.
 
-    The number is unchanged. It is the scope that was wrong.
+    A shop total alone is spent first-come-first-served, so the first
+    candidate that walks takes everything and every later one is read
+    page-one-only. That starves the producer-index route of the follows it
+    exists for -- a candidate reached after exhaustion follows *zero* grower
+    links and reports "zero products found", which is the leszinzinsduvin
+    failure this budget was added to prevent -- and it decides the html
+    candidate ranking by fetch order, which is worse: see `_html_rank`.
+
+    So the shop has a ceiling and each candidate has a reservation.
     """
 
-    def __init__(self, total=PROBE_FOLLOW_BUDGET):
+    def __init__(self, total=PROBE_FOLLOW_BUDGET_PER_SHOP,
+                 per_candidate=PROBE_FOLLOW_BUDGET):
         self.remaining = total
+        self.per_candidate = per_candidate
+
+    def for_candidate(self):
+        """One candidate's share: its own reservation, or what is left."""
+        return _CandidateAllowance(self, min(self.per_candidate, self.remaining))
 
     def take(self):
         if self.remaining <= 0:
             return False
         self.remaining -= 1
         return True
+
+
+class _CandidateAllowance:
+    """One candidate's reservation, drawn from its shop's total."""
+
+    def __init__(self, shop_allowance, share):
+        self._shop = shop_allowance
+        self.remaining = share
+
+    def take(self):
+        if self.remaining <= 0:
+            return False
+        if not self._shop.take():
+            self.remaining = 0
+            return False
+        self.remaining -= 1
+        return True
+
+
+def _html_rank(paginates, items, stated=None):
+    """How good a catalogue this candidate looks like: bigger wins.
+
+    `stated` is the size the page claims for itself, and it is preferred over
+    the count we read because **it does not depend on what we could afford.**
+
+    That is not a refinement, it is a correctness fix. `paginates` comes from
+    `autoselect.find_next_page`, and a Wix gallery publishes no "next" link
+    -- so every Wix candidate ranked `(False, len(items))`, the comparison
+    collapsed to the item count alone, and the item count is a function of how
+    much follow budget was left when that candidate's turn came. The recorded
+    `catalog_path` was therefore chosen by fetch order, under `--apply`.
+
+    Probe run 41461210780 read islands on five feralart candidates stating
+    923, 923, 129, 42 and 16. Ranked on what they state, `/shop` wins -- which
+    is the union, and the right answer. Ranked on what we read, whichever came
+    first did.
+
+    A page that states nothing still ranks on its parsed count, which is all
+    there is to go on and is what every non-Wix shop has always used.
+    """
+    return (paginates, stated or len(items))
 
 
 def try_parse(platform, shop, response, live=None, allowance=None):
@@ -486,7 +550,11 @@ def try_parse(platform, shop, response, live=None, allowance=None):
         canned = CannedCrawler(
             response, platform, live=live,
             follow_budget=PROBE_FOLLOW_BUDGET if platform == "html" else 0,
-            allowance=allowance if platform == "html" else None)
+            # A per-candidate share of the shop's allowance, so an earlier
+            # candidate that walked cannot leave this one with nothing.
+            allowance=(allowance.for_candidate()
+                       if allowance is not None and platform == "html"
+                       else None))
         items = scraper.FETCHERS[platform](probe_shop, canned)
         return items, None
     except Exception as e:
@@ -649,7 +717,14 @@ def probe_shop(shop, crawler_client, deadline=None):
                 save_diagnostic_page(shop["name"], url, body)
             continue
 
+        stated = scraper.wix_catalogue_size(body) if platform == "html" else None
         paginates = bool(autoselect.find_next_page(body, url)) if platform == "html" else False
+        # A Wix gallery states its own size and publishes no "next" link at
+        # all, because it renders its pager in the browser. So a 77-page
+        # catalogue read "single page" here, and `_html_rank` below explains
+        # why that mattered for more than the log line.
+        if stated:
+            paginates = True
         # No HTML page is ever accepted on the spot -- every candidate is
         # weighed and the best wins. Short-circuiting on "this looks like a
         # catalogue" meant a recorded catalog_path, which is tried early by
@@ -671,8 +746,9 @@ def probe_shop(shop, crawler_client, deadline=None):
             result["attempts"].append(attempt)
             if paginates and len(items) >= MIN_CATALOGUE_PAGE:
                 catalogues.append((len(items), url))
-            if (paginates, len(items)) > best_html["rank"]:
-                best_html.update(rank=(paginates, len(items)), count=len(items),
+            rank = _html_rank(paginates, items, stated)
+            if rank > best_html["rank"]:
+                best_html.update(rank=rank, count=len(items),
                                  body=body, url=url, items=items)
             continue
 

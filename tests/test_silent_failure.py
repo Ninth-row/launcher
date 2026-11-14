@@ -410,3 +410,56 @@ def test_a_normal_run_is_not_cut_short(pipeline, capsys):
 def test_no_limit_means_no_limit(pipeline, capsys):
     pipeline(BASIC, max_run_seconds=0)
     assert "out of time" not in capsys.readouterr().out.lower()
+
+
+# --- a grower page that was found, read, and held nothing --------------------
+
+def _index_shop():
+    """zzz-html with a grower index, which is leszinzinsduvin's shape."""
+    return [
+        {**s, "producer_index": "growers.html"} if s["name"] == "zzz-html" else s
+        for s in SHOPS
+    ]
+
+
+GROWER_INDEX = (
+    '<html><body><ul>'
+    '<li><a href="/grower-other.html">Zzz Other</a></li>'
+    '<li><a href="/grower-domaine.html">Zzz Domaine</a></li>'
+    '</ul></body></html>'
+)
+
+
+def test_a_watched_producer_whose_own_page_is_empty_is_named(pipeline, monkeypatch,
+                                                            capsys):
+    """The line that sat in the log for days while the inbox heard nothing.
+
+    Alice Fahrenkrug's page was found through leszinzinsduvin's grower index,
+    fetched, and parsed to zero -- and the only trace was a print. From the
+    digest she was indistinguishable from an alias that matches nothing,
+    which is a different problem with a different fix.
+    """
+    monkeypatch.setattr(scraper, "SHOPS", _index_shop())
+    # The more specific paths first: FakeCrawler serves the first prefix that
+    # matches, so "https://html.test" would otherwise answer for all of them.
+    prose = "<html><body><p>A note about the grower.</p></body></html>"
+    bodies = {
+        "https://html.test/growers.html": GROWER_INDEX,
+        "https://html.test/grower-other.html": prose,
+        "https://html.test/grower-domaine.html": prose,
+        **BASIC,
+    }
+    pipeline(bodies, force=True)
+
+    out = capsys.readouterr().out
+    assert "Own page found and listing nothing" in out
+    assert "Zzz Other [zzz-html]" in out
+    body = pipeline.sent[-1]
+    assert "Own page found and listing nothing" in body
+    assert "Zzz Other" in body
+
+
+def test_a_shop_with_no_grower_index_says_nothing_about_empty_pages(pipeline,
+                                                                    capsys):
+    pipeline(BASIC, force=True)
+    assert "Own page found and listing nothing" not in capsys.readouterr().out

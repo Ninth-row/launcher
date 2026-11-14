@@ -1125,7 +1125,7 @@ def test_the_follow_budget_is_per_shop_not_per_candidate():
     The allowance is shared across a shop's candidates, so the cost of
     probing one shop is bounded whatever shape it turns out to have.
     """
-    allowance = probe.FollowAllowance(total=3)
+    allowance = probe.FollowAllowance(total=3, per_candidate=3)
 
     class Live:
         def __init__(self):
@@ -1191,8 +1191,118 @@ def test_probing_one_shop_is_bounded_whatever_shape_it_turns_out_to_have():
 
     # Candidates are capped by MAX_CATALOGUE_GUESSES; the follow-ups on top
     # of them are capped once for the shop, not once for each.
-    ceiling = probe.MAX_CATALOGUE_GUESSES * 4 + probe.PROBE_FOLLOW_BUDGET
+    ceiling = (probe.MAX_CATALOGUE_GUESSES * 4
+               + probe.PROBE_FOLLOW_BUDGET_PER_SHOP)
     assert stub.request_count <= ceiling, (
         f"one shop spent {stub.request_count} requests; the follow budget "
         f"is being handed out per candidate again"
     )
+
+
+def test_an_earlier_candidate_cannot_leave_a_later_one_with_nothing():
+    """The half of the scope fix that shipping the shop ceiling alone broke.
+
+    Spent first-come-first-served, the first candidate that walks takes
+    everything and every later one is read page-one-only -- which starves the
+    producer-index route of the follows it exists for: a candidate reached
+    after exhaustion follows *zero* grower links and reports "zero products
+    found", the leszinzinsduvin failure this budget was added to prevent.
+    """
+    allowance = probe.FollowAllowance()
+
+    greedy = allowance.for_candidate()
+    while greedy.take():
+        pass
+    assert greedy.remaining == 0, "the first candidate did spend its share"
+
+    # The next candidate still has a reservation of its own.
+    later = allowance.for_candidate()
+    assert later.take(), "a later candidate was left with nothing to follow"
+    assert later.remaining > 0
+
+
+def test_a_candidate_cannot_take_more_than_its_share():
+    allowance = probe.FollowAllowance()
+    candidate = allowance.for_candidate()
+
+    taken = 0
+    while candidate.take():
+        taken += 1
+
+    assert taken == probe.PROBE_FOLLOW_BUDGET
+    # And the shop keeps the rest for the candidates still to come.
+    assert allowance.remaining == (probe.PROBE_FOLLOW_BUDGET_PER_SHOP
+                                   - probe.PROBE_FOLLOW_BUDGET)
+
+
+def test_the_shop_ceiling_still_binds_across_candidates():
+    """The reservation must not become a way around the shop total."""
+    allowance = probe.FollowAllowance()
+    spent = 0
+
+    for _ in range(20):                    # far more candidates than the total
+        candidate = allowance.for_candidate()
+        while candidate.take():
+            spent += 1
+
+    assert spent == probe.PROBE_FOLLOW_BUDGET_PER_SHOP
+    assert allowance.remaining == 0
+
+
+# --- which candidate is the catalogue ---------------------------------------
+
+def test_a_wix_candidate_ranks_on_what_it_states_not_what_we_afforded():
+    """`paginates` is a "next" link, and a Wix gallery publishes none.
+
+    So every Wix candidate ranked `(False, len(items))`, the comparison
+    collapsed to the item count, and that count depends on how much follow
+    budget was left when the candidate's turn came -- so the recorded
+    catalog_path was chosen by fetch order. Probe run 41461210780 read islands
+    stating 923, 923, 129, 42 and 16; the union is the one stating 923.
+    """
+    union = _wix_page(["a", "b"], total=923)
+    slice_ = _wix_page(["c", "d", "e", "f", "g"], total=129)
+
+    # The slice parsed *more* items -- it got the budget -- and must still
+    # lose to the page that says it holds seven times as much.
+    assert probe._html_rank(True, ["x"] * 2, scraper.wix_catalogue_size(union)) > \
+        probe._html_rank(True, ["x"] * 5, scraper.wix_catalogue_size(slice_))
+
+
+def test_a_wix_gallery_is_not_reported_as_a_single_page():
+    """It states 923 over 77 pages and publishes no "next" link, so the probe
+    called it "single page" -- and `paginates` is the first element of the
+    rank, so a real catalogue lost to anything that did link a next page.
+
+    Driven through probe_shop, because `paginates` is *derived* there: an
+    assertion that hands `_html_rank` a ready-made True cannot see the
+    derivation, and a mutation removing it went unnoticed by exactly that.
+    """
+    island = _wix_page(["a", "b"], total=923)
+
+    class WixEverywhere(StubCrawler):
+        def __init__(self):
+            super().__init__({})
+            self.max_requests = 10_000
+
+        def get(self, url, params=None, max_age=None):
+            self.request_count += 1
+            self.calls.append(url)
+            if url.endswith(".json") or "/wp-json/" in url:
+                raise crawler.UpstreamError("HTTP 404", status_code=404)
+            return crawler.FetchResult(200, island)
+
+    result = probe.probe_shop({"name": "zzz-wix", "url": "https://shop.test",
+                               "platform": "html"}, WixEverywhere())
+
+    parsed = [a for a in result["attempts"] if a.get("paginates") is not None]
+    assert parsed, "no candidate was weighed at all"
+    assert all(a["paginates"] for a in parsed), (
+        "a gallery stating 923 products was ranked as a single page"
+    )
+
+
+def test_a_page_stating_nothing_still_ranks_on_what_it_parsed():
+    """Every non-Wix shop has always ranked this way and still does."""
+    assert probe._html_rank(True, ["x"] * 40, None) > \
+        probe._html_rank(True, ["x"] * 12, None)
