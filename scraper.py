@@ -15,7 +15,7 @@ import os
 import re
 import time
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -464,6 +464,8 @@ SHOPS = [
         # /fr-eu/pages/..., /en/collections/tous-nos-vins -- locale prefix
         # plus /collections/, which is Shopify's own shape. Still a guess
         # until the probe fetches it.
+                # /products.json in full: 16 page(s) at SHOPIFY_PAGE_SIZE, measured 2026-11-13.
+        "hot_pages": 16,
         "name": "mareehaute",
         "platform": "shopify",
         "url": "https://www.mareehaute.vin",
@@ -487,24 +489,33 @@ SHOPS = [
         # Platform guess is more confident here: indexed URLs follow
         # Shopify conventions (/en/collections, /en/products/<handle>,
         # /en/cart, /password). Still unverified -- see fixture notes.
+                # /products.json in full: 1 page(s) at SHOPIFY_PAGE_SIZE, measured 2026-11-13.
+        "hot_pages": 1,
         "name": "levinnaturel",
         "platform": "shopify",
         "url": "https://levinnaturel.com",
         "verified": True,
     },
     {
+                # /products.json in full: 6 page(s) at SHOPIFY_PAGE_SIZE, measured 2026-11-13.
+        "hot_pages": 6,
         "name": "lacavedespapilles",
         "platform": "shopify",
         "url": "https://www.lacavedespapilles.com",
         "verified": True,
     },
     {
+                # /products.json in full: 2 page(s) at SHOPIFY_PAGE_SIZE, measured 2026-11-13.
+        "hot_pages": 2,
         "name": "whynat",
         "platform": "shopify",
         "url": "https://www.whynat.fr",
         "verified": True,
     },
     {
+                # Swept whole: 8 pages, 374 products.
+        "hot": "catalogue",
+        "hot_pages": 8,
         "name": "cavepurjus",
         "platform": "html",
         "url": "https://www.cavepurjus.com",
@@ -515,6 +526,10 @@ SHOPS = [
         "verified": True,
     },
     {
+                # Swept whole: its catalogue is one PDF holding 875 wines, so the
+        # sweep costs the index page plus the document.
+        "hot": "catalogue",
+        "hot_pages": 2,
         "name": "purewijnen",
         "platform": "html",
         "url": "https://www.purewijnen.be",
@@ -525,12 +540,16 @@ SHOPS = [
         "verified": True,
     },
     {
+                # /products.json in full: 3 page(s) at SHOPIFY_PAGE_SIZE, measured 2026-11-13.
+        "hot_pages": 3,
         "name": "zuiverwijnen",
         "platform": "shopify",
         "url": "https://zuiverwijnen.nl",
         "verified": True,
     },
     {
+                # /products.json in full: 4 page(s) at SHOPIFY_PAGE_SIZE, measured 2026-11-13.
+        "hot_pages": 4,
         "name": "lavinoterie",
         "platform": "shopify",
         "url": "https://lavinoterie.fr",
@@ -580,6 +599,11 @@ SHOPS = [
     # the digest, until someone writes selectors for it -- that is the honest
     # state, and it is better than the eight false DEALs it replaced.
     {
+                # Swept whole: its entire catalogue is one page (12 products as of
+        # 2026-11-13), so a sweep and a full pass read the same thing and
+        # there is nothing cheaper to invent.
+        "hot": "catalogue",
+        "hot_pages": 1,
         "name": "cavescarriere",
         "platform": "html",
         "url": "https://caves-carriere.fr",
@@ -608,6 +632,9 @@ SHOPS = [
     # and records, and the file's own URL changes with every new edition, so
     # `find_pdf_link` rediscovers it on each run.
     {
+                # Swept whole: 12 requests for an 84-page PDF of 1546 rows.
+        "hot": "catalogue",
+        "hot_pages": 12,
         "name": "wineshopbiarritz",
         "platform": "html",
         "url": "https://www.wineshop-biarritz.fr",
@@ -633,6 +660,9 @@ SHOPS = [
         "verified": False,
     },
     {
+                # Swept whole: one page, 19 products.
+        "hot": "catalogue",
+        "hot_pages": 1,
         "name": "lacaveduchateau",
         "platform": "html",
         "url": "https://www.lacaveduchateau.com",
@@ -672,6 +702,11 @@ SHOPS = [
         "verified": True,
     },
     {
+                # Too big to sweep (79 pages), but its Wix island states
+        # `"totalCount"` beside the twelve records it lists -- measured at
+        # 894, 894, 923 across ten days while the page bytes churned on
+        # every fetch.
+        "hot": "stated_total",
         "name": "feralart",
         "platform": "html",
         "url": "https://www.feralartetvin.com",
@@ -700,6 +735,10 @@ SHOPS = [
         "verified": False,
     },
     {
+                # Too big to sweep (45 pages), but its PrestaShop 1.6 category
+        # heading states `Il y a 2200 produits.`, so one request asks
+        # whether anything changed at all.
+        "hot": "stated_total",
         "name": "oenovinia",
         "platform": "html",
         "url": "https://www.oenovinia.com",
@@ -1112,7 +1151,7 @@ def fetch_shopify(shop, crawler_client, max_age=None):
     )
 
 
-def fetch_woocommerce(shop, crawler_client):
+def fetch_woocommerce(shop, crawler_client, max_age=None):
     base = shop["url"].rstrip("/")
 
     def parse_page(payload):
@@ -1142,6 +1181,7 @@ def fetch_woocommerce(shop, crawler_client):
         lambda page: {"per_page": WOO_PAGE_SIZE, "page": page},
         WOO_PAGE_SIZE,
         parse_page,
+        max_age=max_age,
     )
 
 
@@ -1278,7 +1318,8 @@ def _price_from_detail_pages(shop, items, crawler_client):
     return priced
 
 
-def _fetch_via_producer_index(shop, index_html, index_url, crawler_client):
+def _fetch_via_producer_index(shop, index_html, index_url, crawler_client,
+                              max_age=None):
     """Last resort for a shop with no crawlable catalogue.
 
     leszinzinsduvin only exposes its wines through a POST search form, but
@@ -1296,7 +1337,7 @@ def _fetch_via_producer_index(shop, index_html, index_url, crawler_client):
     items, empty = [], []
     for producer, url in targets[:autoselect.MAX_INDEX_LINKS]:
         try:
-            page = crawler_client.get(url)
+            page = crawler_client.get(url, max_age=max_age)
             page.raise_for_status()
         except crawler.FetchError:
             break
@@ -1667,7 +1708,7 @@ def _walk_pages(shop, crawler_client, start, pages_left, seen_urls, max_age=None
             stated_products)
 
 
-def fetch_html(shop, crawler_client):
+def fetch_html(shop, crawler_client, max_age=None, max_pages=None):
     """Walk an HTML catalogue -- or several, when a shop splits its wines
     across region categories -- following each one's "next page" link.
 
@@ -1742,7 +1783,9 @@ def fetch_html(shop, crawler_client):
         try:
             (fetched, page_truncated, page_items, page_html, page_how,
              stated, stated_items) = _walk_pages(
-                 shop, crawler_client, start, MAX_PAGES_PER_SHOP, seen_urls)
+                 shop, crawler_client, start,
+                 MAX_PAGES_PER_SHOP if max_pages is None else max_pages,
+                 seen_urls, max_age=max_age)
         except (crawler.FetchError, EmptyResponseError) as e:
             failed_starts += 1
             if failed_starts == len(starts):
@@ -1772,7 +1815,8 @@ def fetch_html(shop, crawler_client):
     # Before the document reader, because this one costs no request: the
     # island is already in the page the walk fetched.
     if not items and first_html:
-        wix = _fetch_via_wix_island(shop, first_html, first_url, crawler_client)
+        wix = _fetch_via_wix_island(shop, first_html, first_url, crawler_client,
+                                  max_age=max_age)
         if wix:
             items, how = list(wix), "wix"
             # The island walk *is* this shop's catalogue walk, so its pages
@@ -1784,14 +1828,16 @@ def fetch_html(shop, crawler_client):
             truncated = truncated or wix.truncated
 
     if not items and first_html:
-        items = _fetch_via_pdf_list(shop, first_html, first_url, crawler_client)
+        items = _fetch_via_pdf_list(shop, first_html, first_url, crawler_client,
+                                  max_age=max_age)
         how = "pdf" if items else how
 
     # Survives the merges below: `_add_unseen` returns a plain list, and the
     # one ParsedItems this function returns is built at the end.
     empty_producers = []
     if not items and first_html:
-        items = _fetch_via_producer_index(shop, first_html, first_url, crawler_client)
+        items = _fetch_via_producer_index(shop, first_html, first_url, crawler_client,
+                                          max_age=max_age)
         empty_producers = list(getattr(items, "empty_producers", ()))
         how = "index" if items else how
 
@@ -1808,7 +1854,7 @@ def fetch_html(shop, crawler_client):
     if index_path:
         index_url = _shop_url(shop, index_path)
         try:
-            index = crawler_client.get(index_url)
+            index = crawler_client.get(index_url, max_age=max_age)
             index.raise_for_status()
         except crawler.FetchError:
             # A supplementary reader may never cost the catalogue, so this
@@ -1817,7 +1863,7 @@ def fetch_html(shop, crawler_client):
             index = None
         if index is not None:
             from_index = _fetch_via_producer_index(
-                shop, index.text, index_url, crawler_client)
+                shop, index.text, index_url, crawler_client, max_age=max_age)
             empty_producers = list(getattr(from_index, "empty_producers", ()))
             items, how, added = _add_unseen(items, from_index, how, "index")
             if added:
@@ -1995,7 +2041,8 @@ def _wix_items(records, page_url):
     return items
 
 
-def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
+def _fetch_via_wix_island(shop, page_html, page_url, crawler_client,
+                          max_age=None):
     """Read a Wix Stores catalogue from its JSON island, and walk its pages.
 
     Page one costs no request -- the island is in the HTML the catalogue walk
@@ -2046,7 +2093,8 @@ def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
     ended_at = None
     for page in range(2, last + 1):
         try:
-            resp = crawler_client.get(page_url, params={WIX_PAGE_PARAM: page})
+            resp = crawler_client.get(page_url, params={WIX_PAGE_PARAM: page},
+                                      max_age=max_age)
             resp.raise_for_status()
         except crawler.UpstreamError as e:
             # Its own branch above the base class, and deliberately *not*
@@ -2124,7 +2172,7 @@ def _fetch_via_wix_island(shop, page_html, page_url, crawler_client):
                        pages_total=pages_total)
 
 
-def _fetch_via_pdf_list(shop, page_html, page_url, crawler_client):
+def _fetch_via_pdf_list(shop, page_html, page_url, crawler_client, max_age=None):
     """Last resort for a shop whose catalogue is a document.
 
     purewijnen has no price anywhere in its HTML -- three captured pages, zero
@@ -2147,7 +2195,7 @@ def _fetch_via_pdf_list(shop, page_html, page_url, crawler_client):
     # read. Said out loud, because a shop whose document is refused and whose
     # index is empty would otherwise report a bare 0 products.
     try:
-        document = crawler_client.get(pdf_url)
+        document = crawler_client.get(pdf_url, max_age=max_age)
         document.raise_for_status()
     except crawler.FetchError as e:
         print(f"[{shop['name']}] the document at {pdf_url} could not be read "
@@ -2182,29 +2230,229 @@ FETCHERS = {
 }
 
 
+# What a sweep reads at a shop, cheapest honest signal first. A sweep is only
+# ever the one surface a release lands on -- never a partial catalogue walk,
+# which is what the full pass is for.
+HOT_SHOPIFY = "shopify"            # /products.json states published_at per item
+HOT_NEW_ARRIVALS = "new_arrivals"  # a probe-recorded strip
+HOT_CATALOGUE = "catalogue"        # small enough to read whole, read fresh
+HOT_STATED_TOTAL = "stated_total"  # too big to read; poll the total it states
+
+# A catalogue read whole by a sweep is bounded, because "small" is a measured
+# fact that can stop being true. A shop that outgrows this is reported rather
+# than quietly half-read: reading the first N pages of a catalogue nobody
+# sorted by date is reading badly, which this file refuses everywhere else.
+HOT_CATALOGUE_MAX_PAGES = 14
+
+# How stale a page a sweep may accept. It must match the interval the sweep
+# actually runs at: inheriting crawler.FRESH_PAGE_TTL_SECONDS (1800) while
+# sweeping every 15 minutes serves every second sweep from the disk cache and
+# silently halves the real cadence -- the leszinzinsduvin lesson one level
+# down, where a page we believed we had re-read predates the release.
+SWEEP_PAGE_TTL_SECONDS = float(os.environ.get("SWEEP_PAGE_TTL_SECONDS", "900"))
+
+
+# What each shop last said its catalogue holds. Carried between runs by
+# actions/cache beside seen.json, and tolerant of a missing or corrupt file
+# the way market.load_observations is: a lost totals file costs one sweep of
+# comparison, never a run.
+TOTALS_PATH = Path(os.environ.get(
+    "TOTALS_PATH", Path(__file__).parent / "totals.json"))
+
+# How far into a catalogue a sweep will read once the shop's own counter says
+# something changed. Deliberately modest: the two shops on this path are 45
+# and 79 pages, and spending a whole sweep's budget on one of them is how the
+# tail of the rotation goes unread -- the failure shop_order() exists to stop.
+# A read that stops early says so rather than printing a clean line.
+HOT_ESCALATION_PAGES = 25
+
+
+def load_totals(path=None):
+    path = Path(path or TOTALS_PATH)
+    try:
+        data = json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_totals(totals, path=None):
+    path = Path(path or TOTALS_PATH)
+    try:
+        path.write_text(json.dumps(totals, indent=2, sort_keys=True))
+    except OSError:
+        pass
+
+
+def stated_catalogue_total(html):
+    """The size a shop states about itself on page one, or None.
+
+    Two idioms, both the shop's own words: a Wix island's `totalCount`, and
+    the counters autoselect already reads ("Affichage 1-24 de 2827",
+    "Il y a 2200 produits"). Never a hash of the page: PrestaShop stamps a
+    random `?v=NNNNN` on every asset link on every response and Wix stamps
+    bundle ids, so a page hash changes on 100% of fetches while the stated
+    total sits still for days. A number the shop states is evidence; bytes
+    that churn are not.
+    """
+    total = wix_catalogue_size(html)
+    if total:
+        return total
+    counted = autoselect.catalogue_size(html)
+    total = counted[0] if counted else None
+    return total or None
+
+
+def _fetch_via_stated_total(shop, crawler_client, totals):
+    """One request to ask whether anything changed, and nothing more if not.
+
+    For a shop too big to sweep whole -- 45 and 79 pages -- the cheapest
+    honest signal is the size it states on its own page one. Unchanged means
+    nothing was listed or delisted since the last sweep, so the sweep stops
+    there. Changed is positive evidence that something is new, and only then
+    is the catalogue worth reading.
+
+    What this cannot see is a swap: one listed and one delisted between
+    sweeps leaves the number where it was. That is the price of not walking
+    124 pages every quarter of an hour, it is bounded by the next full pass,
+    and it is stated here rather than discovered later.
+    """
+    name = shop["name"]
+    url = _shop_url(shop, shop.get("catalog_path")
+                    or (shop.get("catalog_paths") or [""])[0])
+    page = crawler_client.get(url, max_age=SWEEP_PAGE_TTL_SECONDS)
+    page.raise_for_status()
+
+    total = stated_catalogue_total(page.text)
+    if total is None:
+        # It used to state a size and has stopped, or we are reading the
+        # wrong page. Either way this shop is no longer being watched by the
+        # means we think, and silence here is how that would hide.
+        print(f"[{name}] sweep: catalogue states no total on {url}; "
+              f"nothing to compare, so nothing was checked")
+        return ParsedItems()
+
+    before = None if totals is None else totals.get(name)
+    if totals is not None:
+        totals[name] = total
+
+    if before is None:
+        print(f"[{name}] sweep: catalogue states {total}; first sweep, "
+              f"nothing to compare yet")
+        return ParsedItems()
+    if total == before:
+        return ParsedItems()
+
+    print(f"[{name}] sweep: catalogue total moved {before} -> {total}; "
+          f"reading up to {HOT_ESCALATION_PAGES} page(s)")
+    items = fetch_html(shop, crawler_client, max_age=SWEEP_PAGE_TTL_SECONDS,
+                       max_pages=HOT_ESCALATION_PAGES)
+    if getattr(items, "truncated", False):
+        print(f"[{name}] sweep: stopped at {HOT_ESCALATION_PAGES} page(s) of a "
+              f"{total}-product catalogue -- read incompletely, the full pass "
+              f"covers the rest")
+    return items
+
+
 def hot_surface(shop):
-    """Has this shop a page where a release shows up first?
+    """Which surface a sweep reads at this shop, or None if it has none.
 
-    Shopify states `published_at` per product in /products.json, so its whole
-    catalogue doubles as a recency feed and costs a request or two at 250
-    products a page. An HTML shop has such a page only if a `new_arrivals`
-    path is configured -- and that path is probe-recorded, never guessed.
+    Returns one of the HOT_* kinds, so `if hot_surface(shop)` still reads as
+    "is this shop swept at all".
 
-    A shop with neither is not read on a hot pass *at all*, rather than read
-    badly: a catalogue walk is what the full pass is for, and doing a partial
-    one hourly would spend the politeness budget of every shop on the list to
-    learn nothing the full pass will not learn properly.
+    Four kinds, chosen by what the shop costs rather than by what it runs:
+
+    - Shopify states `published_at` per product and its whole catalogue is a
+      request or two at 250 a page, so the catalogue *is* the recency feed.
+    - An HTML shop with a probe-recorded `new_arrivals` path reads that.
+    - A shop whose entire catalogue is a handful of pages is read whole. Five
+      shops are in this class and their catalogues are 1, 1, 1, 8 and 12
+      pages; for them a sweep and a full pass are the same read, so there is
+      nothing cheaper to invent.
+    - A shop too big for that, which states its own size on page one, is
+      polled for that number alone -- one request to learn whether anything
+      changed at all.
+
+    A shop with none of these must say so in its own entry
+    (`no_recency_signal`), and `tests/test_hot_pass.py` asserts the
+    disjunction. That test is the whole point: Alice Fahrenkrug's three 2025s
+    were lost at a shop that had no surface and nothing anywhere said so.
     """
     if shop["platform"] == "shopify":
-        return True
+        return HOT_SHOPIFY
     # Presence, not truthiness: "" is a real path -- the shop's own landing
     # page -- and leszinzinsduvin puts its newest arrivals there and nowhere
     # else crawlable. Read as falsy, that shop keeps the hourly cover it has
     # never had.
-    return shop.get("new_arrivals") is not None
+    if shop.get("new_arrivals") is not None:
+        return HOT_NEW_ARRIVALS
+    kind = shop.get("hot")
+    if kind in (HOT_CATALOGUE, HOT_STATED_TOTAL):
+        return kind
+    return None
 
 
-def fetch_hot(shop, crawler_client):
+def recency_gap(shop):
+    """Why this shop is not swept, or None if it is.
+
+    A shop with no surface is a hole in the guarantee, so it may exist only
+    as a declared, measured reason -- never as an omission.
+    """
+    if hot_surface(shop):
+        return None
+    return shop.get("no_recency_signal") or "undeclared"
+
+
+def hot_sweep_pages(shop):
+    """An upper bound on the page requests one sweep spends at this shop.
+
+    Stated rather than measured after the fact, because the budget has to be
+    sized before the run and a sweep that truncates is a sweep that silently
+    stops covering a shop. robots.txt is counted separately by the caller:
+    it is one per host per run and is now cached on disk across runs.
+    """
+    kind = hot_surface(shop)
+    if kind is None:
+        return 0
+    if kind == HOT_SHOPIFY:
+        # /products.json read in full at SHOPIFY_PAGE_SIZE. mareehaute's 3807
+        # products are 16 pages and are most of the whole sweep.
+        return shop.get("hot_pages", 16)
+    if kind == HOT_NEW_ARRIVALS:
+        return NEW_ARRIVALS_PAGES
+    if kind == HOT_CATALOGUE:
+        return min(shop.get("hot_pages", HOT_CATALOGUE_MAX_PAGES),
+                   HOT_CATALOGUE_MAX_PAGES)
+    # One page to read the number, and nothing more unless it moved.
+    return 1
+
+
+def hot_sweep_cost(shops=None):
+    """Requests a complete sweep makes, cold: pages plus one robots.txt a host.
+
+    Cold, because that is the case the budget must survive -- a warm run is
+    cheaper and a budget sized on it truncates the first time the cache is
+    evicted. Redirect hops are counted too: six configured shops sit on a
+    bare domain that redirects to www, and every hop re-enters Crawler.get().
+    """
+    shops = SHOPS if shops is None else shops
+    live = [s for s in shops if s.get("verified", True)]
+    pages = sum(hot_sweep_pages(s) for s in live)
+    hosts = {urlparse(s["url"]).netloc for s in live if hot_surface(s)}
+    redirect_hops = sum(1 for s in live
+                        if hot_surface(s) and not urlparse(s["url"]).netloc.startswith("www."))
+    return pages + len(hosts) + redirect_hops
+
+
+def _hot_fetcher(totals):
+    """check_shop takes fetch(shop, client), so the totals store is bound
+    here rather than threaded through a signature fifteen callers share."""
+    def fetch(shop, crawler_client):
+        return fetch_hot(shop, crawler_client, totals=totals)
+    return fetch
+
+
+def fetch_hot(shop, crawler_client, totals=None):
     """Only the surface a release appears on, read fresh.
 
     Shopify's /products.json is read in full rather than page one alone. Its
@@ -2213,15 +2461,28 @@ def fetch_hot(shop, crawler_client):
     page these shops cost one or two requests, so there is nothing to buy by
     guessing. Recency then comes from `published_at`, which is a fact the
     payload states rather than an order we inferred.
+
+    `totals` is the carried-over store of what each shop last said its
+    catalogue holds, and only the HOT_STATED_TOTAL kind reads or writes it.
     """
-    if shop["platform"] == "shopify":
-        return fetch_shopify(shop, crawler_client,
-                             max_age=crawler.FRESH_PAGE_TTL_SECONDS)
-    new_url = _shop_url(shop, shop["new_arrivals"])
-    fetched, truncated, items, _, _, _, _ = _walk_pages(
-        shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
-        max_age=crawler.FRESH_PAGE_TTL_SECONDS)
-    return ParsedItems(items, truncated=truncated, pages_read=fetched)
+    kind = hot_surface(shop)
+    if kind == HOT_SHOPIFY:
+        return fetch_shopify(shop, crawler_client, max_age=SWEEP_PAGE_TTL_SECONDS)
+    if kind == HOT_NEW_ARRIVALS:
+        new_url = _shop_url(shop, shop["new_arrivals"])
+        fetched, truncated, items, _, _, _, _ = _walk_pages(
+            shop, crawler_client, new_url, NEW_ARRIVALS_PAGES, set(),
+            max_age=SWEEP_PAGE_TTL_SECONDS)
+        return ParsedItems(items, truncated=truncated, pages_read=fetched)
+    if kind == HOT_CATALOGUE:
+        # The same read the full pass does, bounded and fresh. For these five
+        # shops that is one to twelve pages, so a sweep sees the whole range
+        # rather than a slice of it.
+        return fetch_html(shop, crawler_client, max_age=SWEEP_PAGE_TTL_SECONDS,
+                          max_pages=HOT_CATALOGUE_MAX_PAGES)
+    if kind == HOT_STATED_TOTAL:
+        return _fetch_via_stated_total(shop, crawler_client, totals)
+    return ParsedItems()
 
 
 class ParsedItems(list):
@@ -2400,12 +2661,27 @@ def main():
               f"previous runs.")
 
     order = shop_order(SHOPS)
+    # What each shop last said its catalogue holds, for the shops swept by
+    # that number alone. Loaded on both passes: a full pass refreshes it from
+    # the real walk, so a sweep's first comparison after one is against a
+    # total we measured rather than against nothing.
+    totals = load_totals()
     if HOT:
         # Only the shops with a surface worth reading fresh. The rest are not
         # read badly, they are not read: see hot_surface().
         order = [s for s in order if hot_surface(s)]
+        undeclared = [s["name"] for s in SHOPS
+                      if s.get("verified", True) and recency_gap(s) == "undeclared"]
         print(f"Hot pass: {len(order)} shop(s) with a recency surface, read "
-              f"at a {crawler.FRESH_PAGE_TTL_SECONDS:.0f}s cache TTL.")
+              f"at a {SWEEP_PAGE_TTL_SECONDS:.0f}s cache TTL.")
+        if undeclared:
+            # A shop with no surface and no stated reason is a hole in the
+            # guarantee. The test suite refuses one, so this can only fire on
+            # a config edited past it -- and it must be loud, because this is
+            # the exact shape that lost three bottles at leszinzinsduvin.
+            print(f"NO RECENCY SURFACE and no declared reason: "
+                  f"{', '.join(undeclared)} -- these shops are only ever read "
+                  f"by the full pass")
 
     started = time.monotonic()
     empty_pages = []
@@ -2474,7 +2750,7 @@ def main():
 
         try:
             hits = check_shop(shop, crawler_client,
-                              fetch=fetch_hot if HOT else None)
+                              fetch=_hot_fetcher(totals) if HOT else None)
             coverage.append(coverage_row(shop, hits))
             absorb(shop, hits)
             print(f"[{shop['name']}] ok, {len(hits)} hit(s) from "
@@ -2543,7 +2819,7 @@ def main():
             crawler_client.reopen(shop["url"])
             try:
                 hits = check_shop(shop, crawler_client,
-                                  fetch=fetch_hot if HOT else None)
+                                  fetch=_hot_fetcher(totals) if HOT else None)
             except Exception as e:
                 print(f"[{shop['name']}] retry failed too: {e}")
                 continue
@@ -2710,6 +2986,17 @@ def main():
         # shop, so the URLs it did not see are not absent -- they were never
         # looked for, and pruning on that basis would forget the whole list.
         save_watchlist(merge_watchlist(watchlist, all_hits))
+    # Written by both passes, unlike everything above it: the sweep's whole
+    # signal at a stated-total shop is "has this number moved since last
+    # time", so a sweep that read the number and did not record it would
+    # compare against a stale one for ever. A full pass refreshes it from the
+    # real walk. DRY_RUN writes nothing, as everywhere else.
+    if not DRY_RUN:
+        for row in coverage:
+            total = row.get("products_total")
+            if total:
+                totals[row["shop"]] = total
+        save_totals(totals)
 
     # Which shops we actually read, so a bottle missing from a shop we never
     # reached is not announced as a restock when the shop comes back.

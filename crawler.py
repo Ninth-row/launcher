@@ -43,6 +43,15 @@ CACHE_TTL_SECONDS = 6 * 3600
 # call rather than a lower default: a shorter TTL everywhere would multiply
 # what we cost every shop for news that only appears in one place.
 FRESH_PAGE_TTL_SECONDS = 1800
+# How long a fetched robots.txt stays usable on disk. RFC 9309 tells a crawler
+# it may cache robots.txt for up to 24 hours, and these shops do not rewrite
+# theirs hourly. It is kept on disk rather than only in memory because the
+# cache is per *run*: one sweep over 18 shops spends ~18 requests re-reading
+# files that did not change, which was about a quarter of the hot pass's whole
+# budget and the dominant fixed cost of looking more often. A disk hit makes
+# no request and counts nothing, so the budget pays for robots once a day
+# instead of once a sweep. FRESH=1 bypasses it, exactly as it bypasses pages.
+ROBOTS_TTL_SECONDS = 24 * 3600
 # Sized to read every catalogue to its end, not to a budget. Each shop states
 # its own size on page one, and one complete pass over all 23 verified shops is
 # 311 requests -- vinnouveau's 118 pages being most of it. 400 leaves room for
@@ -326,6 +335,40 @@ class Crawler:
 
     # -- robots.txt ---------------------------------------------------
 
+    def _robots_path(self, host):
+        key = hashlib.sha256(f"robots:{host}".encode("utf-8")).hexdigest()
+        return self.cache_dir / f"robots-{key}.json"
+
+    def _robots_from_disk(self, host):
+        """A robots.txt fetched recently enough by an earlier run, or None.
+
+        Returns what the host said -- (status, text) -- not a parsed object,
+        so the caller stores it in `robots_seen` by exactly the route a live
+        fetch does. A disk hit must be indistinguishable downstream from a
+        fresh one, or diagnosing a disallow depends on which run you ask.
+        """
+        if self.fresh:
+            return None
+        path = self._robots_path(host)
+        try:
+            entry = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+        if time.time() - entry.get("fetched_at", 0) > ROBOTS_TTL_SECONDS:
+            return None
+        status = entry.get("status")
+        return (status if status is None else int(status), entry.get("text", ""))
+
+    def _robots_to_disk(self, host, status, text):
+        try:
+            self._robots_path(host).write_text(json.dumps(
+                {"fetched_at": time.time(), "status": status, "text": text}))
+        except OSError:
+            # A cache we cannot write is a cache we do without. Never fatal:
+            # the run has the file in memory and the only cost is that the
+            # next run fetches it again.
+            pass
+
     def _robots_for(self, url):
         host = _host_of(url)
         if host in self._robots_cache:
@@ -334,6 +377,21 @@ class Crawler:
         robots_url = f"{parsed.scheme}://{host}/robots.txt"
         rp = urllib.robotparser.RobotFileParser()
         rp.set_url(robots_url)
+
+        stored = self._robots_from_disk(host)
+        if stored is not None:
+            status, text = stored
+            self.robots_seen[host] = (status, text)
+            # An unreachable robots.txt was recorded as allow-all and is
+            # replayed that way; a 4xx likewise. Re-deriving the verdict from
+            # the stored bytes rather than storing the verdict keeps one
+            # parsing rule in one place.
+            rp.parse([] if status is None or status >= 400 else text.splitlines())
+            self._robots_cache[host] = rp
+            delay = rp.crawl_delay(self.user_agent) or rp.crawl_delay("*")
+            self._crawl_delay[host] = float(delay) if delay else None
+            return rp
+
         try:
             # Counted, because it is a real request to a real host. It was
             # not, so a run made about one uncounted request per host --
@@ -351,13 +409,19 @@ class Crawler:
             # cannot tell "Disallow: /" from a parser of ours reading the file
             # too strictly. Nothing extra goes on the wire -- RFC 9309 has us
             # fetch this on every host already; we simply stop discarding it.
-            self.robots_seen[host] = (resp.status_code, resp.text[:ROBOTS_KEPT_BYTES])
+            kept = resp.text[:ROBOTS_KEPT_BYTES]
+            self.robots_seen[host] = (resp.status_code, kept)
+            self._robots_to_disk(host, resp.status_code, kept)
             if resp.status_code >= 400:
                 rp.parse([])
             else:
                 rp.parse(resp.text.splitlines())
         except requests.RequestException as e:
             self.robots_seen[host] = (None, f"unreachable: {e}")
+            # Deliberately not persisted. A host that did not answer may
+            # answer in a minute, and caching "unreachable" for a day would
+            # turn one blip into a day of crawling a shop against rules we
+            # never read.
             rp.parse([])  # unreachable robots.txt -- treat as allow-all
         self._robots_cache[host] = rp
         delay = rp.crawl_delay(self.user_agent) or rp.crawl_delay("*")

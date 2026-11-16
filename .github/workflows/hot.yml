@@ -39,9 +39,10 @@ permissions:
 jobs:
   hot:
     runs-on: ubuntu-latest
-    # The pass itself is ~24 requests and under two minutes; this is only the
-    # outer backstop, and MAX_RUN_SECONDS below stops the crawl well first.
-    timeout-minutes: 20
+    # A complete sweep is ~73 requests warm and under seven minutes; this is
+    # only the outer backstop, and MAX_RUN_SECONDS below stops the crawl well
+    # first. tests/test_budget.py holds the ordering as a relationship.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -87,6 +88,7 @@ jobs:
             seen.json
             observations.json
             watchlist.json
+            totals.json
           key: wine-scraper-state-${{ github.run_id }}
           restore-keys: |
             wine-scraper-state-
@@ -106,11 +108,21 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
           HOT: "1"
-          # A hard ceiling well above the ~24 requests this pass should cost,
-          # so a bug that sent it down a catalogue cannot spend the shops'
-          # politeness budget before anyone notices.
-          MAX_REQUESTS_PER_RUN: "80"
-          MAX_RUN_SECONDS: "600"
+          # A complete sweep of all 18 verified shops is 73 page requests
+          # plus one robots.txt per host and a redirect hop for the six on a
+          # bare domain: 99 cold, and tests/test_budget.py derives that from
+          # SHOPS rather than trusting this number. The ceiling above it is
+          # for retries (a dead host costs three units) and for a shop that
+          # grows, and it is still a hard stop: a bug that sent this pass
+          # down a catalogue cannot spend every shop's politeness budget
+          # before anyone notices. It was 80 when the sweep read 10 shops and
+          # cost ~24 requests, which is less than a complete sweep now needs.
+          MAX_REQUESTS_PER_RUN: "160"
+          MAX_RUN_SECONDS: "900"
+          # The sweep must not read a page staler than the interval between
+          # sweeps, or every second one is served from the disk cache and the
+          # cadence is silently half what it looks.
+          SWEEP_PAGE_TTL_SECONDS: "900"
           DRY_RUN: ${{ (inputs.dry_run && '1') || '' }}
           # A hand-started run always answers, even with nothing new -- that
           # empty table is the only way to tell "nothing was listed" from

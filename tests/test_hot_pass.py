@@ -20,7 +20,17 @@ from datetime import datetime, timedelta, timezone
 import notify
 import scraper
 
-from canned_shop import product, shopify, woo, woo_product
+from canned_shop import FakeCrawler, SHOPS, html_listing, product, shopify, woo, woo_product
+
+BASIC_HTML = {
+    "https://shopify.test": shopify([]),
+    "https://woo.test": woo([]),
+    "https://html.test": html_listing([
+        ("Zzz Other Savagnin 2019", 40, False),
+        ("Zzz Other Trousseau 2021", 35, False),
+        ("Zzz Other Ploussard 2020", 30, False),
+    ]),
+}
 
 BODIES = {
     "https://shopify.test": shopify([product("Zzz Domaine Cuvee 2020", 40)]),
@@ -153,3 +163,135 @@ def test_the_landing_page_counts_as_a_recency_surface():
     assert scraper.hot_surface({"platform": "html", "new_arrivals": ""})
     assert not scraper.hot_surface({"platform": "html"})
     assert scraper._shop_url({"url": "https://x.test"}, "") == "https://x.test/"
+
+
+# --- the guarantee, as a build failure --------------------------------------
+
+def test_every_verified_shop_is_swept_or_says_why_not():
+    """The test that encodes "this must not happen at any shop".
+
+    Alice Fahrenkrug's three 2025s were listed and sold out inside about seven
+    hours at a shop that had no recency surface, and nothing anywhere said so:
+    `hot_surface()` quietly returned False and that shop was dropped from
+    every sweep. Seven of eighteen shops were in that state.
+
+    So a shop may have no surface only by declaring a measured reason. This
+    asserts the *rule*, never today's config -- a shop added tomorrow with
+    neither a surface nor a reason fails the build, which is the only form a
+    guarantee like this can actually take.
+    """
+    undeclared = [s["name"] for s in scraper.SHOPS
+                  if s.get("verified", True)
+                  and scraper.recency_gap(s) == "undeclared"]
+    assert not undeclared, (
+        f"these verified shops are read only by the 2-hourly full pass and do "
+        f"not say why: {', '.join(undeclared)}. Give each a recency surface, "
+        f"or a `no_recency_signal` naming the measured reason it has none."
+    )
+
+
+def test_a_declared_reason_is_accepted_but_a_blank_one_is_not():
+    """`no_recency_signal: ""` would pass a truthiness check and say nothing."""
+    assert scraper.recency_gap(
+        {"platform": "html", "no_recency_signal": "catalogue is behind a login"}
+    ) == "catalogue is behind a login"
+    assert scraper.recency_gap({"platform": "html"}) == "undeclared"
+    assert scraper.recency_gap({"platform": "html", "no_recency_signal": ""}) \
+        == "undeclared"
+    assert scraper.recency_gap({"platform": "shopify"}) is None
+
+
+def test_every_surface_kind_states_what_it_costs():
+    """The budget is sized from these numbers, so an unpriced kind is a
+    sweep that silently overruns and truncates."""
+    for shop in scraper.SHOPS:
+        if not shop.get("verified", True) or not scraper.hot_surface(shop):
+            continue
+        assert scraper.hot_sweep_pages(shop) > 0, shop["name"]
+
+
+# --- a sweep that reads whole catalogues -------------------------------------
+#
+# Five shops are small enough that a sweep reads their entire catalogue, so a
+# sweep now looks at a great many bottles it already knows. The guard that
+# makes that safe -- only URLs absent from seen.json ever reach the digest --
+# stops being a nicety and becomes the thing standing between a 15-minute
+# cadence and the destruction of every restock alert.
+
+def _catalogue_sweep_shops():
+    return [
+        {**s, "hot": "catalogue", "hot_pages": 1} if s["name"] == "zzz-html" else s
+        for s in SHOPS
+    ]
+
+
+def test_a_catalogue_sweep_leaves_a_known_bottle_untouched(pipeline, monkeypatch):
+    """The blocking test. A sweep reading a whole catalogue sees every bottle
+    on it; not one of the known ones may be restamped, or `_came_back` is
+    destroyed for the whole shop and the silence lasts a month."""
+    monkeypatch.setattr(scraper, "SHOPS", _catalogue_sweep_shops())
+    pipeline(BASIC_HTML, force=True)                  # seed from a full pass
+    before = _state(pipeline)
+    keys = [k for k in before if k != notify.META_KEY]
+    assert keys, "the seeding run recorded nothing"
+
+    long_ago = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    for key in keys:
+        before[key]["last_seen_at"] = long_ago
+    (pipeline.tmp / "seen.json").write_text(json.dumps(before))
+    seeded = (pipeline.tmp / "seen.json").read_text()
+
+    pipeline(BASIC_HTML, hot=True)
+
+    assert (pipeline.tmp / "seen.json").read_text() == seeded, \
+        "a catalogue sweep rewrote the file that decides what has been alerted"
+
+
+def test_a_catalogue_sweep_still_alerts_on_something_new(pipeline, monkeypatch):
+    monkeypatch.setattr(scraper, "SHOPS", _catalogue_sweep_shops())
+    pipeline(BASIC_HTML, force=True)
+    sent_before = len(pipeline.sent)
+
+    grown = dict(BASIC_HTML)
+    grown["https://html.test"] = html_listing([
+        ("Zzz Other Savagnin 2019", 40, False),
+        ("Zzz Other Trousseau 2021", 35, False),
+        ("Zzz Other Ploussard 2020", 30, False),
+        ("Zzz Domaine Melon 2024", 55, False),
+    ])
+    pipeline(grown, hot=True)
+
+    assert len(pipeline.sent) == sent_before + 1
+    assert "Melon" in pipeline.sent[-1]
+
+
+def test_every_page_of_a_sweep_is_read_fresh(monkeypatch):
+    """Not just page one.
+
+    A walk that passes `max_age` to its first request and lets the rest fall
+    back to the 6h catalogue cache reports a fresh read and performs a stale
+    one. That is exactly how a shop can be swept every fifteen minutes and
+    still serve a page written before the release -- the leszinzinsduvin
+    lesson one level down, and invisible from any log.
+    """
+    shop = {**next(s for s in SHOPS if s["name"] == "zzz-html"),
+            "hot": "catalogue", "hot_pages": 3}
+    pages = {
+        "https://html.test": html_listing([
+            ("Zzz Other Savagnin 2019", 40, False),
+            ("Zzz Other Trousseau 2021", 35, False),
+            ("Zzz Other Ploussard 2020", 30, False),
+        ]).replace("</body>", '<a rel="next" href="/p2">next</a></body>'),
+        "https://html.test/p2": html_listing([
+            ("Zzz Other Chardonnay 2022", 42, False),
+            ("Zzz Other Poulsard 2023", 38, False),
+            ("Zzz Other Melon 2021", 31, False),
+        ]),
+    }
+    client = FakeCrawler(pages)
+    scraper.fetch_hot(shop, client, totals={})
+
+    walked = [(u, a) for u, a in client.max_ages if u.startswith("https://html.test")]
+    assert len(walked) >= 2, f"the walk did not reach a second page: {walked}"
+    stale = [u for u, age in walked if age != scraper.SWEEP_PAGE_TTL_SECONDS]
+    assert not stale, f"these pages were allowed to come from the 6h cache: {stale}"
