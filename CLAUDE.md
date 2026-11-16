@@ -1203,16 +1203,18 @@ HTTP header or printed.
   cannot run often enough to win a race for a bottle that exists in dozens,
   and every catalogue page it reads is served from the 6h disk cache, so even
   a run that fires can read a page that predates the release. `HOT=1`
-  (`.github/workflows/hot.yml`, hourly) reads one surface per shop at
-  `FRESH_PAGE_TTL_SECONDS` instead: `hot_surface()` admits a Shopify shop
-  (its `/products.json` doubles as a recency feed) or an HTML shop with a
-  configured `new_arrivals` path, and `fetch_hot()` reads that and nothing
-  else -- measured at 39 pages and 3m48s over the 10 shops that had a surface
-  (run 41305306786), most of it mareehaute's 16 pages, because `fetch_hot`
-  reads Shopify's `/products.json` in full rather than guessing at its order.
+  (`.github/workflows/hot.yml`) reads one surface per shop at
+  `SWEEP_PAGE_TTL_SECONDS` instead, and `hot_surface()` now resolves one for
+  **every** verified shop -- Shopify's `/products.json`, a configured
+  `new_arrivals` path, a whole small catalogue, or the total a big shop
+  states about itself. It was 10 of 18 shops and 39 pages; it is 18 of 18 and
+  73 pages, 99 requests cold once one robots.txt per host and the redirect
+  hops are counted, which `tests/test_budget.py` derives from `SHOPS` rather
+  than trusting a number in a workflow file.
   The dashboard has a **Run hot pass** button beside the full one; the
-  dry-run checkbox applies to either. A shop with neither
-  surface is **not read at all** rather than read badly; a partial catalogue
+  dry-run checkbox applies to either. A shop whose surface cannot be found
+  is **not read at all** rather than read badly, and must say so in its own
+  entry; a partial catalogue
   walk hourly would spend every shop's politeness budget to learn nothing the
   full pass will not learn properly. It goes through `check_shop(fetch=...)`,
   so alias matching, the sold-out split and near-miss tokens are the same
