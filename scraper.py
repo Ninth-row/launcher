@@ -1896,9 +1896,21 @@ def fetch_html(shop, crawler_client, max_age=None, max_pages=None):
     # nothing) and pangee "27/31" while being complete, because its categories
     # share bottles and the URL dedupe ends a walk early. Both read as a
     # shortfall that is not there.
+    # Which of these the 15-minute sweep would have seen on its own. Only
+    # meaningful where the surface is a *part* of the shop -- a strip. Where
+    # the sweep reads the whole catalogue the answer is "all of them" and the
+    # set is left None rather than duplicated.
+    surface_urls = ({i["url"] for i in new_items if i.get("url")}
+                    if new_read and hot_surface(shop) == HOT_NEW_ARRIVALS
+                    else None)
+    if hot_surface(shop) == HOT_STATED_TOTAL:
+        # Its sweep reads a number, not listings, so it would have carried
+        # none of them. Zero is the honest answer and an empty set says it.
+        surface_urls = set()
     return ParsedItems(items, truncated=truncated, pages_read=pages_read,
                        off_catalogue=off_catalogue,
                        empty_producers=empty_producers,
+                       surface_urls=surface_urls,
                        pages_total=pages_total if len(starts) == 1 else None,
                        products_total=(products_total if len(starts) == 1
                                        else None))
@@ -2267,6 +2279,39 @@ TOTALS_PATH = Path(os.environ.get(
 HOT_ESCALATION_PAGES = 25
 
 
+# Stamped on every run that is not a dry run, in the one file both passes
+# write. It is what makes "no email this week" distinguishable from "the
+# trigger has been dead since Tuesday" -- from an inbox those look identical,
+# which is the failure RECAP_DAYS exists to catch one level up.
+TOTALS_META_KEY = "_meta"
+
+
+def _now_iso():
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def _since_last_sweep(meta, now=None):
+    """["last sweep 12 minutes ago"], or a line saying we cannot tell.
+
+    A list, because every other entry in `notes` is one and the renderer
+    expects it. Deliberately not silent when the stamp is missing: a run that
+    cannot say when it last looked has just told you something.
+    """
+    stamp = (meta or {}).get("last_sweep_at")
+    if not stamp:
+        return ["no sweep recorded yet -- either none has run since this "
+                "state was created, or the sweep is not running at all"]
+    try:
+        when = dt.datetime.fromisoformat(stamp)
+    except ValueError:
+        return [f"unreadable timestamp {stamp!r}"]
+    now = now or dt.datetime.now(dt.timezone.utc)
+    minutes = (now - when).total_seconds() / 60
+    if minutes < 90:
+        return [f"last sweep {minutes:.0f} minutes ago"]
+    return [f"last sweep {minutes / 60:.1f} hours ago"]
+
+
 def load_totals(path=None):
     path = Path(path or TOTALS_PATH)
     try:
@@ -2497,9 +2542,13 @@ class ParsedItems(list):
     """
 
     def __init__(self, items=(), truncated=False, pages_read=0, pages_total=None,
-                 off_catalogue=0, products_total=None, empty_producers=()):
+                 off_catalogue=0, products_total=None, empty_producers=(),
+                 surface_urls=None):
         super().__init__(items)
         self.truncated = truncated
+        # The URLs this shop's sweep surface would have carried, or None when
+        # the surface is the whole catalogue and the question is moot.
+        self.surface_urls = surface_urls
         # Watched producers whose own page the producer index pointed at, and
         # which parsed to nothing. Not a hit, not a sold-out row, and not an
         # alias problem -- a page to go and read.
@@ -2543,9 +2592,11 @@ class ShopResult(list):
 
     def __init__(self, hits=(), products_parsed=0, sold_out=(), near_tokens=(),
                  truncated=False, out_of_stock=0, pages_read=0, pages_total=None,
-                 off_catalogue=0, products_total=None, empty_producers=()):
+                 off_catalogue=0, products_total=None, empty_producers=(),
+                 surface_urls=None):
         super().__init__(hits)
         self.empty_producers = list(empty_producers)
+        self.surface_urls = surface_urls
         self.products_parsed = products_parsed
         self.sold_out = list(sold_out)
         self.near_tokens = set(near_tokens)
@@ -2626,6 +2677,7 @@ def check_shop(shop, crawler_client, fetch=None):
         print(f"[{shop['name']}] skipped {skipped} sold-out listing(s)")
     return ShopResult(hits, products_parsed=len(items),
                       empty_producers=getattr(items, "empty_producers", ()),
+                      surface_urls=getattr(items, "surface_urls", None),
                       sold_out=sold_out, near_tokens=near_tokens,
                       truncated=getattr(items, "truncated", False),
                       out_of_stock=skipped,
@@ -2666,6 +2718,8 @@ def main():
     # the real walk, so a sweep's first comparison after one is against a
     # total we measured rather than against nothing.
     totals = load_totals()
+    # Read before this run stamps its own, or every run reports "0 minutes".
+    carried_meta = dict(totals.get(TOTALS_META_KEY) or {})
     if HOT:
         # Only the shops with a surface worth reading fresh. The rest are not
         # read badly, they are not read: see hot_surface().
@@ -2685,6 +2739,7 @@ def main():
 
     started = time.monotonic()
     empty_pages = []
+    surface_misses = []
 
     def absorb(shop, hits):
         """Everything a successful read contributes to the run.
@@ -2709,6 +2764,19 @@ def main():
         # found and read, and names it, which is the actionable half.
         for producer in hits.empty_producers:
             empty_pages.append(f"{producer} [{shop['name']}]")
+        # Would the 15-minute sweep have found what this full pass just
+        # found? At a shop whose surface is a strip, or a number, the answer
+        # is not "yes" by construction -- winenot's catalogue is a colour
+        # facet union, so PACK OVERNOY SAVAGNIN 2018 at EUR 580 sat in stock
+        # and unreported because a pack carries no colour. This turns that
+        # unknown into a number instead of assuming it away. Not on a hot
+        # pass: a sweep cannot audit itself.
+        if hits and hits.surface_urls is not None and not HOT:
+            covered = sum(1 for h in hits if h.get("url") in hits.surface_urls)
+            if covered < len(hits):
+                surface_misses.append(
+                    f"{shop['name']}: the sweep surface carries {covered} of "
+                    f"{len(hits)} of this run's hit(s)")
         if hits.off_catalogue:
             off_catalogue_shops.append(
                 f"{shop['name']}: {hits.off_catalogue} listing(s) on new "
@@ -2996,6 +3064,9 @@ def main():
             total = row.get("products_total")
             if total:
                 totals[row["shop"]] = total
+        meta = dict(totals.get(TOTALS_META_KEY) or {})
+        meta["last_sweep_at" if HOT else "last_full_at"] = _now_iso()
+        totals[TOTALS_META_KEY] = meta
         save_totals(totals)
 
     # Which shops we actually read, so a bottle missing from a shop we never
@@ -3079,6 +3150,14 @@ def main():
         # A cut-short walk is already a TRUNCATED row; this says what was
         # done about the bottles on the pages it did not reach.
         "Watched bottles re-read after a cut-short walk": rechecked,
+        # Display only. A quiet market and a dead trigger send the same
+        # number of emails -- none -- so the run says out loud when it last
+        # looked at all.
+        "Time since the last sweep": _since_last_sweep(carried_meta),
+        # The residual, measured rather than asserted: a shop read every 15
+        # minutes through a strip is only covered to the extent the strip
+        # carries what we hunt.
+        "Hits the 15-minute sweep would have missed": surface_misses,
     }
     # Before the email, so the run's own page carries the result even when the
     # digest is empty, capped, or never sent at all.

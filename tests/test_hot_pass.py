@@ -295,3 +295,77 @@ def test_every_page_of_a_sweep_is_read_fresh(monkeypatch):
     assert len(walked) >= 2, f"the walk did not reach a second page: {walked}"
     stale = [u for u, age in walked if age != scraper.SWEEP_PAGE_TTL_SECONDS]
     assert not stale, f"these pages were allowed to come from the 6h cache: {stale}"
+
+
+# --- does the surface we sweep actually carry what we hunt? ------------------
+
+def test_a_full_pass_measures_what_the_sweep_surface_would_have_missed(
+        pipeline, monkeypatch):
+    """The residual, as a number rather than an assumption.
+
+    A shop swept through a strip is covered only to the extent the strip
+    carries the bottles we watch. winenot's catalogue is a colour-facet
+    union, so PACK OVERNOY SAVAGNIN 2018 sat in stock at EUR 580 and
+    unreported because a pack carries no colour. Nothing measured that.
+    """
+    shops = [
+        {**s, "new_arrivals": "new"} if s["name"] == "zzz-html" else s
+        for s in SHOPS
+    ]
+    monkeypatch.setattr(scraper, "SHOPS", shops)
+    # The strip carries the catalogue's first bottle (same URL) and two
+    # others that are not watched. So of the three hits the catalogue yields,
+    # a sweep of the strip would have seen exactly one.
+    strip = (
+        '<html><body><div class="grid">'
+        '<div><a href="/p/0">Zzz Other Savagnin 2019</a><span>40,00 &euro;</span></div>'
+        '<div><a href="/n/1">Something Else 2020</a><span>12,00 &euro;</span></div>'
+        '<div><a href="/n/2">Another Thing 2021</a><span>14,00 &euro;</span></div>'
+        '</div></body></html>'
+    )
+    bodies = {
+        "https://html.test/new": strip,
+        "https://html.test": html_listing([
+            ("Zzz Other Savagnin 2019", 40, False),
+            ("Zzz Other Trousseau 2021", 35, False),
+            ("Zzz Other Ploussard 2020", 30, False),
+        ]),
+        "https://shopify.test": shopify([]),
+        "https://woo.test": woo([]),
+    }
+    pipeline(bodies, force=True)
+
+    body = pipeline.sent[-1]
+    assert "sweep surface carries" in body, \
+        "the run did not say how much of what it found a sweep would have seen"
+
+
+def test_a_shop_swept_whole_reports_no_shortfall(pipeline, monkeypatch):
+    """Where the sweep reads the whole catalogue the question is moot, and a
+    note that fires on every shop every run is a note nobody reads."""
+    monkeypatch.setattr(scraper, "SHOPS", _catalogue_sweep_shops())
+    pipeline(BASIC_HTML, force=True)
+    assert "sweep surface carries" not in pipeline.sent[-1]
+
+
+def test_a_sweep_records_that_it_ran_and_the_full_pass_says_so(pipeline):
+    """A quiet market and a dead trigger send the same number of emails.
+
+    So the sweep stamps when it last looked, and the full pass renders the
+    elapsed time into the digest. Without the stamp the note silently reads
+    "no sweep recorded yet" for ever, which is worse than saying nothing
+    because it accuses a trigger that is working.
+    """
+    pipeline(BODIES, hot=True, force=True)
+
+    totals = json.loads((pipeline.tmp / "totals.json").read_text())
+    assert totals.get(scraper.TOTALS_META_KEY, {}).get("last_sweep_at"), \
+        "the sweep did not record that it ran"
+
+    pipeline(BODIES, force=True)
+    assert "last sweep" in pipeline.sent[-1].lower()
+
+
+def test_a_dry_run_records_nothing(pipeline):
+    pipeline(BODIES, hot=True, force=True, dry_run=True)
+    assert not (pipeline.tmp / "totals.json").exists()

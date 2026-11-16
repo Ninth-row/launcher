@@ -1275,6 +1275,22 @@ HTTP header or printed.
   minute, and caching the silence for a day turns one blip into a day of
   crawling against rules we never read. `FRESH=1` bypasses it, as it bypasses
   pages.
+- **The run says when it last looked, and how much of what it found a sweep
+  would have seen.** Two notes, both display-only, both there because the
+  alternative is an unknown that reads like good news. A quiet market and a
+  dead trigger send the same number of emails -- none -- so every run stamps
+  `_meta.last_sweep_at` in `totals.json` and the digest renders the elapsed
+  time; a missing stamp says so out loud rather than staying silent, because
+  silence there accuses a trigger that may be working. And a shop swept
+  through a *strip* is covered only to the extent the strip carries what we
+  hunt: winenot's catalogue is a colour-facet union, so `PACK OVERNOY
+  SAVAGNIN 2018` at EUR 580 sat in stock and unreported because a pack
+  carries no colour. Each full pass now replays its own hits against the
+  sweep surface's URLs and states "the sweep surface carries N of M of this
+  run's hits". Where the sweep reads the whole catalogue the question is
+  moot and nothing is printed -- a note that fires on every shop every run
+  is a note nobody reads. Neither is computed on a hot pass: a sweep cannot
+  audit itself.
 - **A hot pass alerts only on a product URL never recorded before, and that
   filter is a safety mechanism before it is a policy.** `_update_state`
   stamps `last_seen_at` for *every* in-stock hit, alerted or not, and

@@ -1,0 +1,40 @@
+# An arm of a measurement, not a part of the scraper.
+#
+# Both real workflows receive about 3.5 scheduled runs a day whatever their
+# cron asks for -- scraper.yml asks 12 and gets 3.4, hot.yml asks 24 and gets
+# 3.7 -- so a public repo appears to deliver roughly one run per workflow per
+# seven hours. Two readings cannot tell "~3.5 per workflow, independent" from
+# "a shared cap of ~7 split two ways", and those two have opposite answers:
+# the first means several staggered sweeps would multiply our cover, the
+# second means nothing inside GitHub ever will and the trigger has to come
+# from outside.
+#
+# So: two arms that do nothing but exist, with their own concurrency groups,
+# at distinct non-zero minutes. If each receives ~3.5/day and the repo total
+# rises from ~7 to ~14, the throttle is per workflow. If all four arms fall
+# to ~1.8 and the total stays pinned near 7, it is a repo cap.
+#
+# This one also re-tests "does asking less deliver more" against its
+# six-hourly twin, on a clean arm -- the comparison that produced that
+# question was between two workflows sharing one concurrency group.
+#
+# It takes no permissions, checks nothing out, touches no state, reaches no
+# network and holds no secret. Delete both arms once the question is settled.
+name: Measure schedule delivery (hourly arm)
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+
+concurrency:
+  group: wine-measure-hourly
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "hourly arm fired at $(date -u +%FT%TZ)"
