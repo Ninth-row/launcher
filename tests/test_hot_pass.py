@@ -369,3 +369,69 @@ def test_a_sweep_records_that_it_ran_and_the_full_pass_says_so(pipeline):
 def test_a_dry_run_records_nothing(pipeline):
     pipeline(BODIES, hot=True, force=True, dry_run=True)
     assert not (pipeline.tmp / "totals.json").exists()
+
+
+# --- a surface that does not work must not read as cover ---------------------
+#
+# The declaration test asserts a shop *has* a surface, never that the surface
+# returns anything. The first live 18-shop sweep found both ways that gap
+# bites: mesbourgognes' configured new-arrivals path answered HTTP 404 and the
+# row said `unreachable`, and vinnouveau's strip read 1 page and 0 products
+# under a clean `ok`. Both shops counted as covered. That is the Fahrenkrug
+# failure in a new coat.
+
+def test_a_404_is_a_path_to_correct_not_an_outage(pipeline, capsys):
+    """Waiting does not fix a 404.
+
+    `unreachable` reads as a network fault someone could wait out, so a shop
+    whose configured path has moved sits in the list looking like an outage
+    while covering nothing. NOT_THERE_STATUSES already said a 404 is "just as
+    settled" as a refusal; only the reporting disagreed.
+    """
+    pipeline(BODIES, hot=True, force=True, refuse_hosts={"shopify.test": 404})
+
+    out = capsys.readouterr().out
+    assert "path is not there" in out
+    assert "unreachable" not in out
+    body = pipeline.sent[-1]
+    assert "Configured path is not there" in body
+    assert "zzz-shopify" in body
+
+
+def test_a_surface_that_carries_nothing_is_named(pipeline, capsys):
+    """A strip lists the newest N products whether or not any are new, so
+    parsing zero from one is a path or an adapter problem, never a quiet
+    market -- and a quiet market is exactly what it used to look like."""
+    bodies = dict(BODIES)
+    bodies["https://shopify.test"] = shopify([])
+    pipeline(bodies, hot=True, force=True)
+
+    body = pipeline.sent[-1]
+    assert "surface carried no products" in body
+    assert "zzz-shopify" in body
+    assert "has never carried anything" in body
+
+
+def test_a_surface_that_worked_before_says_when(pipeline):
+    """One empty read is weak evidence; a week of them is conclusive. So the
+    note carries the date the surface last carried anything."""
+    pipeline(BODIES, hot=True, force=True)          # a productive sweep
+    totals = json.loads((pipeline.tmp / "totals.json").read_text())
+    assert totals[scraper.TOTALS_META_KEY]["surface_ok"].get("zzz-shopify")
+
+    bodies = dict(BODIES)
+    bodies["https://shopify.test"] = shopify([])
+    pipeline(bodies, hot=True, force=True)
+
+    body = pipeline.sent[-1]
+    assert "last carried anything" in body
+    assert "has never carried anything" not in body
+
+
+def test_the_run_states_what_it_spent(pipeline, capsys):
+    """The budget is what bounds coverage now. Read off the PAGES column it
+    misses the robots.txt fetches, the documents and the redirect hops, so
+    the run prints the number it actually has."""
+    pipeline(BODIES, hot=True, force=True)
+    assert "Requests spent:" in capsys.readouterr().out
+    assert "Requests spent" in pipeline.sent[-1]

@@ -1318,6 +1318,37 @@ HTTP header or printed.
   being read. The one thing it keeps is `FORCE_REPORT`: a run a human pressed
   a button for still answers with an empty table, because silence from a run
   you asked for reads as a dead scraper.
+  **It does carry four notes, enumerated and no others**, and the exception
+  is deliberate. The rule above is about claims only a complete crawl can
+  support; these are facts about *this sweep* -- what it spent, when the last
+  sweep ran, and the two ways a surface can be covered on paper and carry
+  nothing. Withholding them is precisely how seven shops went unswept with
+  nothing anywhere saying so, so the sweep's digest states them and the list
+  stays short on purpose.
+- **A declared surface that does not work reads as cover, and that is the
+  Fahrenkrug failure in a new coat.** The declaration test asserts a shop
+  *has* a surface, never that the surface *returns anything* -- it has to,
+  since it runs offline against config. The first live 18-shop sweep found
+  both ways the gap bites: mesbourgognes' configured `new_arrivals`
+  (`fr/nouveaux-produits`) answered **HTTP 404** under a row reading
+  `unreachable`, and vinnouveau's strip read `1 page, 0 products` under a
+  clean `ok`. Both shops counted as covered.
+  So two observations are reported, from the sweep that made them. **A 404 is
+  a path to correct, not an outage**: `NOT_THERE_STATUSES` already called it
+  "just as settled" as a refusal and only the reporting disagreed, so it now
+  gets its own coverage word (`missing 404`) and its own note, because waiting
+  does not fix a 404 and nobody but a human can. And **a sweep surface that
+  parses zero products is named** -- a new-arrivals strip lists the newest N
+  whether or not any are new, so zero is a path or an adapter problem and
+  never a quiet market. One empty read is weak evidence, so the note carries
+  the date that surface last carried anything (`_meta.surface_ok` in
+  `totals.json`); "has never carried anything" is the damning version.
+- **The run states what it spent.** `Requests spent: N of M`, in the log
+  beside the coverage table and in the digest. The budget is what bounds
+  coverage now, and reading it off the PAGES column misses the robots.txt
+  fetches, the documents and the redirect hops -- after the first live sweep
+  the number could not be answered at all without reconstructing it, which is
+  no way to know a sweep is about to start truncating.
 - Both workflows share one `actions/cache` entry, so they share one
   `concurrency` group. `hot.yml` deliberately uses `group: wine-scraper`,
   the full pass's group, rather than one of its own: seen.json decides what

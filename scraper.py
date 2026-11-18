@@ -2701,6 +2701,8 @@ def main():
     silent_shops = []
     blocked_shops = []       # answered 200 with a bot challenge, not content
     refused_shops = []       # answered, and the answer was no
+    missing_paths = []       # answered 404: a path to correct, not an outage
+    barren_surfaces = []     # swept, and the surface carried no products
     unreached = []           # verified shops the run never got to
     verified_names = [s["name"] for s in SHOPS if s.get("verified", True)]
     # Rotated so a binding budget does not starve the same tail every hour.
@@ -2720,6 +2722,11 @@ def main():
     totals = load_totals()
     # Read before this run stamps its own, or every run reports "0 minutes".
     carried_meta = dict(totals.get(TOTALS_META_KEY) or {})
+    # When each shop's sweep surface last carried a product. Carried in, so a
+    # surface that has been barren for days can say so rather than looking
+    # like one quiet read.
+    carried_surface_ok = dict(carried_meta.get("surface_ok") or {})
+    surface_ok = dict(carried_surface_ok)
     if HOT:
         # Only the shops with a surface worth reading fresh. The rest are not
         # read badly, they are not read: see hot_surface().
@@ -2781,6 +2788,21 @@ def main():
             off_catalogue_shops.append(
                 f"{shop['name']}: {hits.off_catalogue} listing(s) on new "
                 f"arrivals that the catalogue does not carry")
+        if HOT:
+            # A sweep surface is a page that lists products; a new-arrivals
+            # strip lists the newest N whether or not anything is new today,
+            # so parsing zero from one is an adapter or a path problem, not a
+            # quiet market. It is reported with the date it last carried
+            # anything, because one empty read is weak evidence and a week of
+            # them is conclusive.
+            if hits.products_parsed:
+                surface_ok[shop["name"]] = _now_iso()
+            else:
+                since = carried_surface_ok.get(shop["name"])
+                barren_surfaces.append(
+                    f"{shop['name']}: parsed 0 products "
+                    + (f"(last carried anything {since[:10]})" if since
+                       else "(has never carried anything)"))
         if hits.products_parsed == 0 and not HOT:
             # Its fixture parses to more than zero, so the adapter has stopped
             # reading this shop. Until now this printed the same line as a
@@ -2859,6 +2881,17 @@ def main():
                 coverage.append(coverage_row(shop, status=f"refused {code}"))
                 print(f"[{shop['name']}] refused us: HTTP {code}. Not retried -- "
                       f"a shop answering 'no' is answered by not going there")
+            elif code in NOT_THERE_STATUSES:
+                # Reported as `unreachable` this read as a network fault
+                # someone could wait out, and mesbourgognes' configured
+                # new-arrivals path answered 404 on every sweep while the
+                # shop counted as covered. A door that is not there is a
+                # path to correct, and nobody but a human can correct it.
+                missing_paths.append(f"{shop['name']} (HTTP {code})")
+                coverage.append(coverage_row(shop, status=f"missing {code}"))
+                print(f"[{shop['name']}] the configured path is not there: "
+                      f"HTTP {code}. Not retried, and not an outage -- this is "
+                      f"a path to correct")
             else:
                 coverage.append(coverage_row(shop, status="unreachable"))
                 print(f"[{shop['name']}] unreachable: {e}")
@@ -2949,6 +2982,11 @@ def main():
     for line in table:
         print(line)
     print()
+    # Beside the table rather than only in the digest: the budget is what
+    # bounds coverage, and reading it off the PAGES column misses the
+    # robots.txt fetches, the documents and the redirect hops.
+    print(f"Requests spent: {crawler_client.request_count} of "
+          f"{crawler_client.max_requests}.")
     # Not written by a hot pass: it would replace a 17-row table describing
     # every shop's whole catalogue with a handful of rows describing one page
     # each, and coverage.json exists to answer "does what we read match what
@@ -3066,6 +3104,8 @@ def main():
                 totals[row["shop"]] = total
         meta = dict(totals.get(TOTALS_META_KEY) or {})
         meta["last_sweep_at" if HOT else "last_full_at"] = _now_iso()
+        if HOT:
+            meta["surface_ok"] = surface_ok
         totals[TOTALS_META_KEY] = meta
         save_totals(totals)
 
@@ -3117,11 +3157,27 @@ def main():
             # and marks nothing as alerted, exactly as it does on a full pass.
             print("Hot pass: nothing newly listed -- silent run is valid.")
             return
+        # A short, enumerated set of notes, and no others. The rule is that a
+        # hot pass must not say anything only a complete crawl can know --
+        # "found nowhere", "sold out everywhere", DRIFT, near-misses, a
+        # coverage table -- because printed off one page each they would
+        # accuse the watchlist every sweep. Every line below is instead a
+        # fact about *this sweep*: what it spent, when the last one ran, and
+        # the two ways a surface can be covered on paper and carry nothing.
+        # Withholding those is how seven shops went unswept with nothing
+        # anywhere saying so, so the exception is deliberate and bounded.
+        sweep_notes = {
+            "Requests spent": [f"{crawler_client.request_count} of "
+                               f"{crawler_client.max_requests}"],
+            "Time since the last sweep": _since_last_sweep(carried_meta),
+            "Configured path is not there -- correct it": missing_paths,
+            "Swept, but the surface carried no products": barren_surfaces,
+        }
         # shops_read is empty on purpose. It is what stamps _meta.shops, the
         # "were we actually looking" guard behind _came_back, and reading a
         # new-arrivals strip is not reading this shop.
         notify.run_digest(fresh, dry_run=DRY_RUN, force=FORCE_REPORT,
-                          shops_read=(), tables=None, notes=None)
+                          shops_read=(), tables=None, notes=sweep_notes)
         return
 
     notes = {
@@ -3131,6 +3187,10 @@ def main():
         # will make a 403 go away, so the only useful next step is a human
         # deciding whether the shop stays on the list.
         "Refused us -- not retried": refused_shops,
+        # Separate from an outage on purpose: waiting does not fix a 404, and
+        # a shop whose configured path is gone is covered on paper only.
+        "Configured path is not there -- correct it": missing_paths,
+        "Swept, but the surface carried no products": barren_surfaces,
         "Matched but sold out everywhere": sold_out_only,
         unseen_title: unseen,
         # Said beside "found nowhere" rather than instead of it: both are
@@ -3154,6 +3214,10 @@ def main():
         # number of emails -- none -- so the run says out loud when it last
         # looked at all.
         "Time since the last sweep": _since_last_sweep(carried_meta),
+        # The budget is what bounds coverage, so a run that is approaching it
+        # should say so before the shop at the end of the rotation goes dark.
+        "Requests spent": [f"{crawler_client.request_count} of "
+                           f"{crawler_client.max_requests}"],
         # The residual, measured rather than asserted: a shop read every 15
         # minutes through a strip is only covered to the extent the strip
         # carries what we hunt.
