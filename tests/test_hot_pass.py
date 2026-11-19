@@ -435,3 +435,61 @@ def test_the_run_states_what_it_spent(pipeline, capsys):
     pipeline(BODIES, hot=True, force=True)
     assert "Requests spent:" in capsys.readouterr().out
     assert "Requests spent" in pipeline.sent[-1]
+
+
+def _stated_total_shops():
+    return [
+        {**s, "hot": "stated_total", "catalog_path": "cat"}
+        if s["name"] == "zzz-html" else s
+        for s in SHOPS
+    ]
+
+
+def test_a_stated_total_shop_reading_nothing_is_not_a_hole(pipeline, monkeypatch):
+    """The noise this note made on its own first live run.
+
+    For a stated-total shop "carried no products" is the designed quiet
+    answer: it reads one number and stops unless that number moved. Reported
+    as a hole it named feralart and oenovinia -- 2 of 3 entries were noise,
+    and a noisy note is an ignored note.
+    """
+    monkeypatch.setattr(scraper, "SHOPS", _stated_total_shops())
+    bodies = {
+        "https://html.test/cat": "<html><body><p>Il y a 2200 produits.</p></body></html>",
+        **BODIES,
+    }
+    pipeline(bodies, hot=True, force=True)
+
+    # Nothing else in this scenario is barren -- the Shopify and Woo shops
+    # both parse products -- so the note must not appear at all.
+    assert "surface carried no products" not in pipeline.sent[-1]
+
+
+def test_a_stated_total_shop_that_stops_stating_one_is_a_hole(pipeline, monkeypatch):
+    """Its own version of a barren surface: nothing to compare, so the sweep
+    checks nothing. This was a `print` and nothing else, which is the exact
+    shape that named Alice Fahrenkrug for days while the inbox heard
+    nothing."""
+    monkeypatch.setattr(scraper, "SHOPS", _stated_total_shops())
+    bodies = {
+        "https://html.test/cat": "<html><body><p>no counter at all</p></body></html>",
+        **BODIES,
+    }
+    pipeline(bodies, hot=True, force=True)
+
+    body = pipeline.sent[-1]
+    assert "no longer states a total" in body
+    assert "zzz-html" in body
+
+
+def test_a_dry_run_does_not_accuse_a_working_trigger(pipeline, capsys):
+    """A dry run writes no state by design, so it can never have a stamp of
+    its own -- and the missing-stamp wording accused the trigger in exactly
+    the runs a human is watching."""
+    pipeline(BODIES, hot=True, force=True, dry_run=True)
+    # A dry run prints the digest instead of sending it, which is the whole
+    # point: `sent` is empty and stdout is where the notes land.
+    assert not pipeline.sent
+    out = capsys.readouterr().out
+    assert "this was a dry run" in out
+    assert "not running at all" not in out

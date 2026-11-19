@@ -2290,14 +2290,20 @@ def _now_iso():
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
-def _since_last_sweep(meta, now=None):
+def _since_last_sweep(meta, now=None, dry_run=False):
     """["last sweep 12 minutes ago"], or a line saying we cannot tell.
 
     A list, because every other entry in `notes` is one and the renderer
     expects it. Deliberately not silent when the stamp is missing: a run that
     cannot say when it last looked has just told you something.
+
+    A dry run writes no state at all, by design, so it can never have a
+    stamp of its own -- and the missing-stamp wording accused a trigger that
+    may be working perfectly, in exactly the runs a human is watching.
     """
     stamp = (meta or {}).get("last_sweep_at")
+    if not stamp and dry_run:
+        return ["not recorded -- this was a dry run, which writes no state"]
     if not stamp:
         return ["no sweep recorded yet -- either none has run since this "
                 "state was created, or the sweep is not running at all"]
@@ -2373,9 +2379,13 @@ def _fetch_via_stated_total(shop, crawler_client, totals):
         # It used to state a size and has stopped, or we are reading the
         # wrong page. Either way this shop is no longer being watched by the
         # means we think, and silence here is how that would hide.
+        # Printed and carried. A print was all this was, and a print is what
+        # named Alice Fahrenkrug for days while the inbox heard nothing.
         print(f"[{name}] sweep: catalogue states no total on {url}; "
               f"nothing to compare, so nothing was checked")
-        return ParsedItems()
+        empty = ParsedItems()
+        empty.states_no_total = True
+        return empty
 
     before = None if totals is None else totals.get(name)
     if totals is not None:
@@ -2549,6 +2559,10 @@ class ParsedItems(list):
         # The URLs this shop's sweep surface would have carried, or None when
         # the surface is the whole catalogue and the question is moot.
         self.surface_urls = surface_urls
+        # A stated-total shop whose catalogue has stopped stating one. Its
+        # sweep then compares nothing and checks nothing, which is that
+        # shop kind's version of a surface carrying no products.
+        self.states_no_total = False
         # Watched producers whose own page the producer index pointed at, and
         # which parsed to nothing. Not a hit, not a sold-out row, and not an
         # alias problem -- a page to go and read.
@@ -2593,10 +2607,11 @@ class ShopResult(list):
     def __init__(self, hits=(), products_parsed=0, sold_out=(), near_tokens=(),
                  truncated=False, out_of_stock=0, pages_read=0, pages_total=None,
                  off_catalogue=0, products_total=None, empty_producers=(),
-                 surface_urls=None):
+                 surface_urls=None, states_no_total=False):
         super().__init__(hits)
         self.empty_producers = list(empty_producers)
         self.surface_urls = surface_urls
+        self.states_no_total = states_no_total
         self.products_parsed = products_parsed
         self.sold_out = list(sold_out)
         self.near_tokens = set(near_tokens)
@@ -2678,6 +2693,7 @@ def check_shop(shop, crawler_client, fetch=None):
     return ShopResult(hits, products_parsed=len(items),
                       empty_producers=getattr(items, "empty_producers", ()),
                       surface_urls=getattr(items, "surface_urls", None),
+                      states_no_total=getattr(items, "states_no_total", False),
                       sold_out=sold_out, near_tokens=near_tokens,
                       truncated=getattr(items, "truncated", False),
                       out_of_stock=skipped,
@@ -2788,7 +2804,14 @@ def main():
             off_catalogue_shops.append(
                 f"{shop['name']}: {hits.off_catalogue} listing(s) on new "
                 f"arrivals that the catalogue does not carry")
-        if HOT:
+        # A stated-total shop is exempt, because for it "carried no products"
+        # is the designed quiet answer: its sweep reads one number and stops
+        # unless that number moved. Reported as a hole it named feralart and
+        # oenovinia on this note's very first live run -- 2 of its 3 entries
+        # were noise, and a noisy note is an ignored note. Its own hole is a
+        # shop that has stopped stating a total at all, which
+        # _fetch_via_stated_total detects and `states_no_total` carries here.
+        if HOT and hot_surface(shop) != HOT_STATED_TOTAL:
             # A sweep surface is a page that lists products; a new-arrivals
             # strip lists the newest N whether or not anything is new today,
             # so parsing zero from one is an adapter or a path problem, not a
@@ -2803,6 +2826,10 @@ def main():
                     f"{shop['name']}: parsed 0 products "
                     + (f"(last carried anything {since[:10]})" if since
                        else "(has never carried anything)"))
+        elif HOT and getattr(hits, "states_no_total", False):
+            barren_surfaces.append(
+                f"{shop['name']}: its catalogue no longer states a total, so "
+                f"the sweep has nothing to compare and checks nothing")
         if hits.products_parsed == 0 and not HOT:
             # Its fixture parses to more than zero, so the adapter has stopped
             # reading this shop. Until now this printed the same line as a
@@ -3169,7 +3196,8 @@ def main():
         sweep_notes = {
             "Requests spent": [f"{crawler_client.request_count} of "
                                f"{crawler_client.max_requests}"],
-            "Time since the last sweep": _since_last_sweep(carried_meta),
+            "Time since the last sweep": _since_last_sweep(
+                carried_meta, dry_run=DRY_RUN),
             "Configured path is not there -- correct it": missing_paths,
             "Swept, but the surface carried no products": barren_surfaces,
         }
@@ -3213,7 +3241,8 @@ def main():
         # Display only. A quiet market and a dead trigger send the same
         # number of emails -- none -- so the run says out loud when it last
         # looked at all.
-        "Time since the last sweep": _since_last_sweep(carried_meta),
+        "Time since the last sweep": _since_last_sweep(
+            carried_meta, dry_run=DRY_RUN),
         # The budget is what bounds coverage, so a run that is approaching it
         # should say so before the shop at the end of the rotation goes dark.
         "Requests spent": [f"{crawler_client.request_count} of "

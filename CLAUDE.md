@@ -1343,6 +1343,20 @@ HTTP header or printed.
   never a quiet market. One empty read is weak evidence, so the note carries
   the date that surface last carried anything (`_meta.surface_ok` in
   `totals.json`); "has never carried anything" is the damning version.
+  **A `stated_total` shop is exempt, and leaving it in was a defect this
+  note's own first live run exposed.** For that kind "carried no products" is
+  the designed quiet answer -- it reads one number and stops unless the
+  number moved -- so run 44375623591 named feralart and oenovinia beside
+  vinnouveau and **2 of its 3 entries were noise**, which this file's own
+  rule says makes a note an ignored note. Its equivalent hole is a shop that
+  has stopped stating a total at all: the sweep then compares nothing and
+  checks nothing, and that is what `ParsedItems.states_no_total` carries into
+  the same note. It was a `print` and nothing else first, which is the exact
+  shape that named Alice Fahrenkrug for days while the inbox heard nothing.
+  A dry run is exempt from the sweep-stamp line for the same family of
+  reason: it writes no state by design, so it can never have a stamp of its
+  own, and the missing-stamp wording accused a trigger that may be working
+  perfectly -- in exactly the runs a human is watching.
 - **The run states what it spent.** `Requests spent: N of M`, in the log
   beside the coverage table and in the digest. The budget is what bounds
   coverage now, and reading it off the PAGES column misses the robots.txt
