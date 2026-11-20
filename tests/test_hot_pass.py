@@ -20,7 +20,17 @@ from datetime import datetime, timedelta, timezone
 import notify
 import scraper
 
-from canned_shop import product, shopify, woo, woo_product
+from canned_shop import FakeCrawler, SHOPS, html_listing, product, shopify, woo, woo_product
+
+BASIC_HTML = {
+    "https://shopify.test": shopify([]),
+    "https://woo.test": woo([]),
+    "https://html.test": html_listing([
+        ("Zzz Other Savagnin 2019", 40, False),
+        ("Zzz Other Trousseau 2021", 35, False),
+        ("Zzz Other Ploussard 2020", 30, False),
+    ]),
+}
 
 BODIES = {
     "https://shopify.test": shopify([product("Zzz Domaine Cuvee 2020", 40)]),
@@ -153,3 +163,333 @@ def test_the_landing_page_counts_as_a_recency_surface():
     assert scraper.hot_surface({"platform": "html", "new_arrivals": ""})
     assert not scraper.hot_surface({"platform": "html"})
     assert scraper._shop_url({"url": "https://x.test"}, "") == "https://x.test/"
+
+
+# --- the guarantee, as a build failure --------------------------------------
+
+def test_every_verified_shop_is_swept_or_says_why_not():
+    """The test that encodes "this must not happen at any shop".
+
+    Alice Fahrenkrug's three 2025s were listed and sold out inside about seven
+    hours at a shop that had no recency surface, and nothing anywhere said so:
+    `hot_surface()` quietly returned False and that shop was dropped from
+    every sweep. Seven of eighteen shops were in that state.
+
+    So a shop may have no surface only by declaring a measured reason. This
+    asserts the *rule*, never today's config -- a shop added tomorrow with
+    neither a surface nor a reason fails the build, which is the only form a
+    guarantee like this can actually take.
+    """
+    undeclared = [s["name"] for s in scraper.SHOPS
+                  if s.get("verified", True)
+                  and scraper.recency_gap(s) == "undeclared"]
+    assert not undeclared, (
+        f"these verified shops are read only by the 2-hourly full pass and do "
+        f"not say why: {', '.join(undeclared)}. Give each a recency surface, "
+        f"or a `no_recency_signal` naming the measured reason it has none."
+    )
+
+
+def test_a_declared_reason_is_accepted_but_a_blank_one_is_not():
+    """`no_recency_signal: ""` would pass a truthiness check and say nothing."""
+    assert scraper.recency_gap(
+        {"platform": "html", "no_recency_signal": "catalogue is behind a login"}
+    ) == "catalogue is behind a login"
+    assert scraper.recency_gap({"platform": "html"}) == "undeclared"
+    assert scraper.recency_gap({"platform": "html", "no_recency_signal": ""}) \
+        == "undeclared"
+    assert scraper.recency_gap({"platform": "shopify"}) is None
+
+
+def test_every_surface_kind_states_what_it_costs():
+    """The budget is sized from these numbers, so an unpriced kind is a
+    sweep that silently overruns and truncates."""
+    for shop in scraper.SHOPS:
+        if not shop.get("verified", True) or not scraper.hot_surface(shop):
+            continue
+        assert scraper.hot_sweep_pages(shop) > 0, shop["name"]
+
+
+# --- a sweep that reads whole catalogues -------------------------------------
+#
+# Five shops are small enough that a sweep reads their entire catalogue, so a
+# sweep now looks at a great many bottles it already knows. The guard that
+# makes that safe -- only URLs absent from seen.json ever reach the digest --
+# stops being a nicety and becomes the thing standing between a 15-minute
+# cadence and the destruction of every restock alert.
+
+def _catalogue_sweep_shops():
+    return [
+        {**s, "hot": "catalogue", "hot_pages": 1} if s["name"] == "zzz-html" else s
+        for s in SHOPS
+    ]
+
+
+def test_a_catalogue_sweep_leaves_a_known_bottle_untouched(pipeline, monkeypatch):
+    """The blocking test. A sweep reading a whole catalogue sees every bottle
+    on it; not one of the known ones may be restamped, or `_came_back` is
+    destroyed for the whole shop and the silence lasts a month."""
+    monkeypatch.setattr(scraper, "SHOPS", _catalogue_sweep_shops())
+    pipeline(BASIC_HTML, force=True)                  # seed from a full pass
+    before = _state(pipeline)
+    keys = [k for k in before if k != notify.META_KEY]
+    assert keys, "the seeding run recorded nothing"
+
+    long_ago = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    for key in keys:
+        before[key]["last_seen_at"] = long_ago
+    (pipeline.tmp / "seen.json").write_text(json.dumps(before))
+    seeded = (pipeline.tmp / "seen.json").read_text()
+
+    pipeline(BASIC_HTML, hot=True)
+
+    assert (pipeline.tmp / "seen.json").read_text() == seeded, \
+        "a catalogue sweep rewrote the file that decides what has been alerted"
+
+
+def test_a_catalogue_sweep_still_alerts_on_something_new(pipeline, monkeypatch):
+    monkeypatch.setattr(scraper, "SHOPS", _catalogue_sweep_shops())
+    pipeline(BASIC_HTML, force=True)
+    sent_before = len(pipeline.sent)
+
+    grown = dict(BASIC_HTML)
+    grown["https://html.test"] = html_listing([
+        ("Zzz Other Savagnin 2019", 40, False),
+        ("Zzz Other Trousseau 2021", 35, False),
+        ("Zzz Other Ploussard 2020", 30, False),
+        ("Zzz Domaine Melon 2024", 55, False),
+    ])
+    pipeline(grown, hot=True)
+
+    assert len(pipeline.sent) == sent_before + 1
+    assert "Melon" in pipeline.sent[-1]
+
+
+def test_every_page_of_a_sweep_is_read_fresh(monkeypatch):
+    """Not just page one.
+
+    A walk that passes `max_age` to its first request and lets the rest fall
+    back to the 6h catalogue cache reports a fresh read and performs a stale
+    one. That is exactly how a shop can be swept every fifteen minutes and
+    still serve a page written before the release -- the leszinzinsduvin
+    lesson one level down, and invisible from any log.
+    """
+    shop = {**next(s for s in SHOPS if s["name"] == "zzz-html"),
+            "hot": "catalogue", "hot_pages": 3}
+    pages = {
+        "https://html.test": html_listing([
+            ("Zzz Other Savagnin 2019", 40, False),
+            ("Zzz Other Trousseau 2021", 35, False),
+            ("Zzz Other Ploussard 2020", 30, False),
+        ]).replace("</body>", '<a rel="next" href="/p2">next</a></body>'),
+        "https://html.test/p2": html_listing([
+            ("Zzz Other Chardonnay 2022", 42, False),
+            ("Zzz Other Poulsard 2023", 38, False),
+            ("Zzz Other Melon 2021", 31, False),
+        ]),
+    }
+    client = FakeCrawler(pages)
+    scraper.fetch_hot(shop, client, totals={})
+
+    walked = [(u, a) for u, a in client.max_ages if u.startswith("https://html.test")]
+    assert len(walked) >= 2, f"the walk did not reach a second page: {walked}"
+    stale = [u for u, age in walked if age != scraper.SWEEP_PAGE_TTL_SECONDS]
+    assert not stale, f"these pages were allowed to come from the 6h cache: {stale}"
+
+
+# --- does the surface we sweep actually carry what we hunt? ------------------
+
+def test_a_full_pass_measures_what_the_sweep_surface_would_have_missed(
+        pipeline, monkeypatch):
+    """The residual, as a number rather than an assumption.
+
+    A shop swept through a strip is covered only to the extent the strip
+    carries the bottles we watch. winenot's catalogue is a colour-facet
+    union, so PACK OVERNOY SAVAGNIN 2018 sat in stock at EUR 580 and
+    unreported because a pack carries no colour. Nothing measured that.
+    """
+    shops = [
+        {**s, "new_arrivals": "new"} if s["name"] == "zzz-html" else s
+        for s in SHOPS
+    ]
+    monkeypatch.setattr(scraper, "SHOPS", shops)
+    # The strip carries the catalogue's first bottle (same URL) and two
+    # others that are not watched. So of the three hits the catalogue yields,
+    # a sweep of the strip would have seen exactly one.
+    strip = (
+        '<html><body><div class="grid">'
+        '<div><a href="/p/0">Zzz Other Savagnin 2019</a><span>40,00 &euro;</span></div>'
+        '<div><a href="/n/1">Something Else 2020</a><span>12,00 &euro;</span></div>'
+        '<div><a href="/n/2">Another Thing 2021</a><span>14,00 &euro;</span></div>'
+        '</div></body></html>'
+    )
+    bodies = {
+        "https://html.test/new": strip,
+        "https://html.test": html_listing([
+            ("Zzz Other Savagnin 2019", 40, False),
+            ("Zzz Other Trousseau 2021", 35, False),
+            ("Zzz Other Ploussard 2020", 30, False),
+        ]),
+        "https://shopify.test": shopify([]),
+        "https://woo.test": woo([]),
+    }
+    pipeline(bodies, force=True)
+
+    body = pipeline.sent[-1]
+    assert "sweep surface carries" in body, \
+        "the run did not say how much of what it found a sweep would have seen"
+
+
+def test_a_shop_swept_whole_reports_no_shortfall(pipeline, monkeypatch):
+    """Where the sweep reads the whole catalogue the question is moot, and a
+    note that fires on every shop every run is a note nobody reads."""
+    monkeypatch.setattr(scraper, "SHOPS", _catalogue_sweep_shops())
+    pipeline(BASIC_HTML, force=True)
+    assert "sweep surface carries" not in pipeline.sent[-1]
+
+
+def test_a_sweep_records_that_it_ran_and_the_full_pass_says_so(pipeline):
+    """A quiet market and a dead trigger send the same number of emails.
+
+    So the sweep stamps when it last looked, and the full pass renders the
+    elapsed time into the digest. Without the stamp the note silently reads
+    "no sweep recorded yet" for ever, which is worse than saying nothing
+    because it accuses a trigger that is working.
+    """
+    pipeline(BODIES, hot=True, force=True)
+
+    totals = json.loads((pipeline.tmp / "totals.json").read_text())
+    assert totals.get(scraper.TOTALS_META_KEY, {}).get("last_sweep_at"), \
+        "the sweep did not record that it ran"
+
+    pipeline(BODIES, force=True)
+    assert "last sweep" in pipeline.sent[-1].lower()
+
+
+def test_a_dry_run_records_nothing(pipeline):
+    pipeline(BODIES, hot=True, force=True, dry_run=True)
+    assert not (pipeline.tmp / "totals.json").exists()
+
+
+# --- a surface that does not work must not read as cover ---------------------
+#
+# The declaration test asserts a shop *has* a surface, never that the surface
+# returns anything. The first live 18-shop sweep found both ways that gap
+# bites: mesbourgognes' configured new-arrivals path answered HTTP 404 and the
+# row said `unreachable`, and vinnouveau's strip read 1 page and 0 products
+# under a clean `ok`. Both shops counted as covered. That is the Fahrenkrug
+# failure in a new coat.
+
+def test_a_404_is_a_path_to_correct_not_an_outage(pipeline, capsys):
+    """Waiting does not fix a 404.
+
+    `unreachable` reads as a network fault someone could wait out, so a shop
+    whose configured path has moved sits in the list looking like an outage
+    while covering nothing. NOT_THERE_STATUSES already said a 404 is "just as
+    settled" as a refusal; only the reporting disagreed.
+    """
+    pipeline(BODIES, hot=True, force=True, refuse_hosts={"shopify.test": 404})
+
+    out = capsys.readouterr().out
+    assert "path is not there" in out
+    assert "unreachable" not in out
+    body = pipeline.sent[-1]
+    assert "Configured path is not there" in body
+    assert "zzz-shopify" in body
+
+
+def test_a_surface_that_carries_nothing_is_named(pipeline, capsys):
+    """A strip lists the newest N products whether or not any are new, so
+    parsing zero from one is a path or an adapter problem, never a quiet
+    market -- and a quiet market is exactly what it used to look like."""
+    bodies = dict(BODIES)
+    bodies["https://shopify.test"] = shopify([])
+    pipeline(bodies, hot=True, force=True)
+
+    body = pipeline.sent[-1]
+    assert "surface carried no products" in body
+    assert "zzz-shopify" in body
+    assert "has never carried anything" in body
+
+
+def test_a_surface_that_worked_before_says_when(pipeline):
+    """One empty read is weak evidence; a week of them is conclusive. So the
+    note carries the date the surface last carried anything."""
+    pipeline(BODIES, hot=True, force=True)          # a productive sweep
+    totals = json.loads((pipeline.tmp / "totals.json").read_text())
+    assert totals[scraper.TOTALS_META_KEY]["surface_ok"].get("zzz-shopify")
+
+    bodies = dict(BODIES)
+    bodies["https://shopify.test"] = shopify([])
+    pipeline(bodies, hot=True, force=True)
+
+    body = pipeline.sent[-1]
+    assert "last carried anything" in body
+    assert "has never carried anything" not in body
+
+
+def test_the_run_states_what_it_spent(pipeline, capsys):
+    """The budget is what bounds coverage now. Read off the PAGES column it
+    misses the robots.txt fetches, the documents and the redirect hops, so
+    the run prints the number it actually has."""
+    pipeline(BODIES, hot=True, force=True)
+    assert "Requests spent:" in capsys.readouterr().out
+    assert "Requests spent" in pipeline.sent[-1]
+
+
+def _stated_total_shops():
+    return [
+        {**s, "hot": "stated_total", "catalog_path": "cat"}
+        if s["name"] == "zzz-html" else s
+        for s in SHOPS
+    ]
+
+
+def test_a_stated_total_shop_reading_nothing_is_not_a_hole(pipeline, monkeypatch):
+    """The noise this note made on its own first live run.
+
+    For a stated-total shop "carried no products" is the designed quiet
+    answer: it reads one number and stops unless that number moved. Reported
+    as a hole it named feralart and oenovinia -- 2 of 3 entries were noise,
+    and a noisy note is an ignored note.
+    """
+    monkeypatch.setattr(scraper, "SHOPS", _stated_total_shops())
+    bodies = {
+        "https://html.test/cat": "<html><body><p>Il y a 2200 produits.</p></body></html>",
+        **BODIES,
+    }
+    pipeline(bodies, hot=True, force=True)
+
+    # Nothing else in this scenario is barren -- the Shopify and Woo shops
+    # both parse products -- so the note must not appear at all.
+    assert "surface carried no products" not in pipeline.sent[-1]
+
+
+def test_a_stated_total_shop_that_stops_stating_one_is_a_hole(pipeline, monkeypatch):
+    """Its own version of a barren surface: nothing to compare, so the sweep
+    checks nothing. This was a `print` and nothing else, which is the exact
+    shape that named Alice Fahrenkrug for days while the inbox heard
+    nothing."""
+    monkeypatch.setattr(scraper, "SHOPS", _stated_total_shops())
+    bodies = {
+        "https://html.test/cat": "<html><body><p>no counter at all</p></body></html>",
+        **BODIES,
+    }
+    pipeline(bodies, hot=True, force=True)
+
+    body = pipeline.sent[-1]
+    assert "no longer states a total" in body
+    assert "zzz-html" in body
+
+
+def test_a_dry_run_does_not_accuse_a_working_trigger(pipeline, capsys):
+    """A dry run writes no state by design, so it can never have a stamp of
+    its own -- and the missing-stamp wording accused the trigger in exactly
+    the runs a human is watching."""
+    pipeline(BODIES, hot=True, force=True, dry_run=True)
+    # A dry run prints the digest instead of sending it, which is the whole
+    # point: `sent` is empty and stdout is where the notes land.
+    assert not pipeline.sent
+    out = capsys.readouterr().out
+    assert "this was a dry run" in out
+    assert "not running at all" not in out

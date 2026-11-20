@@ -88,6 +88,7 @@ class FakeCrawler:
         self.refuse_hosts = dict(refuse_hosts or {})
         self.reopened = []
         self.urls = []
+        self.max_ages = []
 
     def reopen(self, url):
         self.reopened.append(url)
@@ -95,6 +96,11 @@ class FakeCrawler:
     def get(self, url, params=None, max_age=None):
         self.request_count += 1
         self.urls.append(url)
+        # Per request, because "was this read fresh" has to be answerable of
+        # page forty and not only of page one: a walk that passes max_age to
+        # its first page and inherits the 6h cache for the rest looks fresh
+        # and is not.
+        self.max_ages.append((url, max_age))
         if self.request_count > self.max_requests:
             raise crawler.BudgetExceeded(url)
         for host in self.fail_hosts:

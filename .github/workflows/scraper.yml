@@ -90,6 +90,7 @@ jobs:
             seen.json
             observations.json
             watchlist.json
+            totals.json
           key: wine-scraper-state-${{ github.run_id }}
           restore-keys: |
             wine-scraper-state-

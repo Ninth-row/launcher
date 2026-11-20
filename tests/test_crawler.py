@@ -710,3 +710,89 @@ def test_the_short_ttl_is_shorter_than_the_catalogue_one(monkeypatch):
     # Asserted as a relationship, not as today's numbers: the whole point is
     # that news is read sooner than a twentieth catalogue page.
     assert crawler_mod.FRESH_PAGE_TTL_SECONDS < crawler_mod.CACHE_TTL_SECONDS
+
+
+# --- robots.txt survives the run that fetched it -----------------------------
+#
+# The cache was per-run, so a sweep over 18 shops spent ~18 requests re-reading
+# files that had not changed -- about a quarter of the hot pass's whole budget,
+# and the dominant fixed cost of looking more often. RFC 9309 allows caching it
+# for 24 hours.
+
+def _robots_crawler(monkeypatch, tmp_cache, body="User-agent: *\nDisallow: /private/\n",
+                    status=200, **kwargs):
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None, **kwargs_):
+        calls.append(url)
+        if url.endswith("/robots.txt"):
+            return FakeResp(status, body)
+        return FakeResp(200, "page")
+
+    monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
+    return make_crawler(tmp_cache, **kwargs), calls
+
+
+def test_a_second_run_does_not_refetch_robots(monkeypatch, tmp_cache):
+    first, calls = _robots_crawler(monkeypatch, tmp_cache)
+    first.get("https://shop.test/a")
+    assert sum(1 for u in calls if u.endswith("/robots.txt")) == 1
+
+    second, calls2 = _robots_crawler(monkeypatch, tmp_cache)
+    second.get("https://shop.test/b")
+    assert [u for u in calls2 if u.endswith("/robots.txt")] == [], \
+        "robots.txt was re-fetched although a fresh copy was on disk"
+    # And it costs the budget nothing, which is the point of persisting it.
+    assert second.request_count == 1
+
+
+def test_the_stored_rules_are_still_obeyed(monkeypatch, tmp_cache):
+    """A disk hit must be indistinguishable from a live fetch downstream.
+
+    Replaying it as allow-all would crawl a disallowed path for a whole day
+    off one cached file, which is worse than the requests it saves.
+    """
+    first, _ = _robots_crawler(monkeypatch, tmp_cache)
+    first.get("https://shop.test/a")
+
+    second, _ = _robots_crawler(monkeypatch, tmp_cache)
+    with pytest.raises(crawler_mod.Disallowed):
+        second.get("https://shop.test/private/x")
+    assert second.robots_seen["shop.test"][0] == 200
+
+
+def test_a_stale_copy_is_refetched(monkeypatch, tmp_cache):
+    first, _ = _robots_crawler(monkeypatch, tmp_cache)
+    first.get("https://shop.test/a")
+
+    path = first._robots_path("shop.test")
+    entry = json.loads(path.read_text())
+    entry["fetched_at"] -= crawler_mod.ROBOTS_TTL_SECONDS + 1
+    path.write_text(json.dumps(entry))
+
+    second, calls = _robots_crawler(monkeypatch, tmp_cache)
+    second.get("https://shop.test/a")
+    assert [u for u in calls if u.endswith("/robots.txt")]
+
+
+def test_fresh_bypasses_the_stored_copy(monkeypatch, tmp_cache):
+    first, _ = _robots_crawler(monkeypatch, tmp_cache)
+    first.get("https://shop.test/a")
+
+    second, calls = _robots_crawler(monkeypatch, tmp_cache, fresh=True)
+    second.get("https://shop.test/a")
+    assert [u for u in calls if u.endswith("/robots.txt")]
+
+
+def test_an_unreachable_robots_is_not_cached(monkeypatch, tmp_cache):
+    """A host that did not answer may answer in a minute. Caching the silence
+    for a day turns one blip into a day of crawling against rules never read."""
+    def fake_get(url, headers=None, timeout=None, **kwargs):
+        if url.endswith("/robots.txt"):
+            raise crawler_mod.requests.RequestException("boom")
+        return FakeResp(200, "page")
+
+    monkeypatch.setattr(crawler_mod.requests, "get", fake_get)
+    first = make_crawler(tmp_cache)
+    first.get("https://shop.test/a")
+    assert not first._robots_path("shop.test").exists()

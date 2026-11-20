@@ -928,14 +928,34 @@ HTTP header or printed.
   before the catalogue did (`ParsedItems.truncated`, set by `_paged` and
   `fetch_html`), and that is the one cell that decides whether the row can
   be compared with the shop's real selection at all.
-- The schedule is not a promise GitHub keeps. A public repo's scheduled runs
-  are queued at low priority: `cron: "0 * * * *"` delivered runs at 20:22,
-  22:08, 23:55, 02:24, 05:43, 08:27, 11:17 and 13:55 -- and then two runs were
-  **cancelled without ever being given a runner** (`runner_id: 0`, no logs, a
-  15-minute wait then cancelled), which arrives as a failure email that looks
-  exactly like a broken scraper and is not one. Asking for 24 runs to receive
-  10 only adds queue pressure, so the schedule asks for what it can get, and a
-  `concurrency` group keeps a delayed run from overlapping the next one.
+- **The cron is a request, not a schedule, and its frequency is not a lever.**
+  Measured on 2026-11-14 over the same 188-hour window, from the Actions API:
+  `scraper.yml` asks for 12 runs a day and receives **3.4**; `hot.yml` asks
+  for 24 and receives **3.7**. Mean gap 7.1h and 6.5h, medians 7.3h and 7.1h,
+  worst 10.2h and 10.6h. So a public repo delivers roughly **one run per
+  workflow per 7 hours whatever the cron says**, and asking for half as often
+  delivered the same number of runs.
+  This file used to reason the other way -- "asking for 24 runs to receive 10
+  only adds queue pressure, so the schedule asks for what it can get" -- and
+  that causal clause is simply false. What survives is stronger: do not tune
+  cron frequency, do not derive a detection interval from it, and never build
+  anything whose correctness depends on a scheduled run arriving. A missing
+  run is normal. A run **cancelled without ever being given a runner**
+  (`runner_id: 0`, no logs, a 15-minute wait then cancelled) arrives as a
+  failure email that looks exactly like a broken scraper and is not one.
+  Two neighbouring hypotheses were tested and killed rather than assumed.
+  Scheduled runs are not being cancelled by the shared `concurrency` group:
+  across 52 hot-pass runs **every one concluded `success`**, so the missing
+  runs are never created rather than queued and dropped. And the throttle may
+  be per workflow rather than per repo -- two workflows each receiving ~3.5/day
+  is equally consistent with a shared cap of ~7 divided two ways -- which is
+  why `.github/workflows/measure-*.yml` exist: two inert arms, distinct
+  concurrency groups, one `echo` each, to settle it with data before anything
+  is built on the answer.
+  The consequence that matters: at that delivery rate a bottle which lives
+  seven hours falls entirely inside a gap **about half the time**. Alice
+  Fahrenkrug's three 2025s did. Covering every shop was necessary and came
+  nowhere near sufficient.
 - Every outbound request counts against the budget, robots.txt included. It
   was not counted, so a run made about one uncounted request per host --
   roughly 19 against a 400 budget sized from a measured 311-request pass --
@@ -1168,7 +1188,7 @@ HTTP header or printed.
   *previous* deployment, since this push's has not started -- which is the
   right question anyway, because a wedge is a standing condition.
 - State lives in two caches, and the split is load-bearing. `seen.json`,
-  `observations.json` and `watchlist.json` are a few hundred KB; `.cache` is
+  `observations.json`, `watchlist.json` and `totals.json` are a few hundred KB; `.cache` is
   ~6.5 MB of fetched pages. Cached under one key they are evicted under one
   key -- and run 41290903522 restored nothing, so the pool arrived empty, the
   POOL note fired, and every verdict that run rested on a single crawl.
@@ -1183,20 +1203,96 @@ HTTP header or printed.
   cannot run often enough to win a race for a bottle that exists in dozens,
   and every catalogue page it reads is served from the 6h disk cache, so even
   a run that fires can read a page that predates the release. `HOT=1`
-  (`.github/workflows/hot.yml`, hourly) reads one surface per shop at
-  `FRESH_PAGE_TTL_SECONDS` instead: `hot_surface()` admits a Shopify shop
-  (its `/products.json` doubles as a recency feed) or an HTML shop with a
-  configured `new_arrivals` path, and `fetch_hot()` reads that and nothing
-  else -- measured at 39 pages and 3m48s over the 10 shops that had a surface
-  (run 41305306786), most of it mareehaute's 16 pages, because `fetch_hot`
-  reads Shopify's `/products.json` in full rather than guessing at its order.
+  (`.github/workflows/hot.yml`) reads one surface per shop at
+  `SWEEP_PAGE_TTL_SECONDS` instead, and `hot_surface()` now resolves one for
+  **every** verified shop -- Shopify's `/products.json`, a configured
+  `new_arrivals` path, a whole small catalogue, or the total a big shop
+  states about itself. It was 10 of 18 shops and 39 pages; it is 18 of 18 and
+  73 pages, 99 requests cold once one robots.txt per host and the redirect
+  hops are counted, which `tests/test_budget.py` derives from `SHOPS` rather
+  than trusting a number in a workflow file.
   The dashboard has a **Run hot pass** button beside the full one; the
-  dry-run checkbox applies to either. A shop with neither
-  surface is **not read at all** rather than read badly; a partial catalogue
+  dry-run checkbox applies to either. A shop whose surface cannot be found
+  is **not read at all** rather than read badly, and must say so in its own
+  entry; a partial catalogue
   walk hourly would spend every shop's politeness budget to learn nothing the
   full pass will not learn properly. It goes through `check_shop(fetch=...)`,
   so alias matching, the sold-out split and near-miss tokens are the same
   code: a hot find reaches the digest by the route a normal find takes.
+- **Every verified shop is swept, or says in its own entry why it is not.**
+  `hot_surface()` used to be true only for Shopify or a configured
+  `new_arrivals` path, so **seven of eighteen shops were read only by the
+  2-hourly full pass and nothing anywhere said so**. For those seven the miss
+  probability inside a seven-hour window was not a risk, it was 1.0 -- which
+  is how three Fahrenkrug 2025s were listed and sold out unseen. A surface is
+  now chosen by what the shop costs, not by what it runs:
+  Shopify's `/products.json` (it states `published_at` per product);
+  a probe-recorded `new_arrivals` path;
+  `hot: catalogue` for a shop whose *entire* catalogue is a handful of pages
+  -- cavescarriere 1, lacaveduchateau 1, purewijnen 1 (its catalogue is one
+  PDF of 875 wines), cavepurjus 8, wineshopbiarritz 12 -- where a sweep and a
+  full pass read the same thing;
+  and `hot: stated_total` for a shop too big for that which states its own
+  size on page one (oenovinia 45 pages, feralart 79).
+  A shop with none of those must carry `no_recency_signal` naming the
+  measured reason, and `tests/test_hot_pass.py` asserts the disjunction, so a
+  shop added without either **fails the build**. That test is the only form
+  this guarantee can actually take; a promise of coverage is not one. The
+  rule is asserted, never the seven names, exactly as the config-state rule
+  below requires.
+- **A shop is swept by a number it states about itself, never by a hash of
+  its page.** The totals are kept in `totals.json`, written by both passes,
+  and a sweep of a `stated_total` shop is one request: unchanged means
+  nothing was listed or delisted and the sweep stops there. Hashing page one
+  instead was measured and is dead: two captures of feralart's `/shop` eight
+  weeks apart both state `"totalCount":894` and **do not have the same
+  bytes**, because Wix restamps its runtime config and bundle ids on every
+  response exactly as PrestaShop stamps a random `?v=NNNNN` on every asset
+  link. A hash fires on 100% of fetches and degenerates into reading every
+  catalogue every sweep, which is the impolite thing this design exists to
+  avoid. `tests/test_stated_total.py` keeps all three real captures.
+  What this cannot see is a **swap** -- one listed and one delisted between
+  sweeps leaves the number where it was. It is confined to two shops, bounded
+  by the next full pass, and stated here rather than discovered later.
+  Escalation after a change is capped (`HOT_ESCALATION_PAGES`) and says when
+  it stopped early: spending a whole sweep on one 79-page shop is how the
+  tail of the rotation goes unread, which `shop_order()` exists to prevent.
+- **A sweep's page TTL must not exceed the interval between sweeps.**
+  `SWEEP_PAGE_TTL_SECONDS` is 900 to match a 15-minute sweep. Inheriting
+  `crawler.FRESH_PAGE_TTL_SECONDS` (1800) would serve every second sweep from
+  the disk cache: the cadence looks doubled, is not, and the page we believe
+  we re-read predates the release. It must also reach **every page of a
+  walk**, not page one -- a walk whose later pages fall back to the 6h
+  catalogue cache reports a fresh read and performs a stale one, and nothing
+  in a log distinguishes them. `tests/test_hot_pass.py` asserts it per
+  request.
+- **robots.txt is cached on disk for 24 hours, not just in memory.** RFC 9309
+  allows a day, and the in-memory cache was per *run*: a sweep over 18 shops
+  spent ~18 requests re-reading files that had not changed -- about a quarter
+  of the whole sweep budget and the dominant fixed cost of looking more
+  often. A disk hit makes no request and counts nothing, and is replayed
+  through the same parse as a live fetch, so a stored `Disallow` is still
+  obeyed and still appears in `robots_seen`. An **unreachable** robots.txt is
+  deliberately not persisted: a host that did not answer may answer in a
+  minute, and caching the silence for a day turns one blip into a day of
+  crawling against rules we never read. `FRESH=1` bypasses it, as it bypasses
+  pages.
+- **The run says when it last looked, and how much of what it found a sweep
+  would have seen.** Two notes, both display-only, both there because the
+  alternative is an unknown that reads like good news. A quiet market and a
+  dead trigger send the same number of emails -- none -- so every run stamps
+  `_meta.last_sweep_at` in `totals.json` and the digest renders the elapsed
+  time; a missing stamp says so out loud rather than staying silent, because
+  silence there accuses a trigger that may be working. And a shop swept
+  through a *strip* is covered only to the extent the strip carries what we
+  hunt: winenot's catalogue is a colour-facet union, so `PACK OVERNOY
+  SAVAGNIN 2018` at EUR 580 sat in stock and unreported because a pack
+  carries no colour. Each full pass now replays its own hits against the
+  sweep surface's URLs and states "the sweep surface carries N of M of this
+  run's hits". Where the sweep reads the whole catalogue the question is
+  moot and nothing is printed -- a note that fires on every shop every run
+  is a note nobody reads. Neither is computed on a hot pass: a sweep cannot
+  audit itself.
 - **A hot pass alerts only on a product URL never recorded before, and that
   filter is a safety mechanism before it is a policy.** `_update_state`
   stamps `last_seen_at` for *every* in-stock hit, alerted or not, and
@@ -1222,6 +1318,51 @@ HTTP header or printed.
   being read. The one thing it keeps is `FORCE_REPORT`: a run a human pressed
   a button for still answers with an empty table, because silence from a run
   you asked for reads as a dead scraper.
+  **It does carry four notes, enumerated and no others**, and the exception
+  is deliberate. The rule above is about claims only a complete crawl can
+  support; these are facts about *this sweep* -- what it spent, when the last
+  sweep ran, and the two ways a surface can be covered on paper and carry
+  nothing. Withholding them is precisely how seven shops went unswept with
+  nothing anywhere saying so, so the sweep's digest states them and the list
+  stays short on purpose.
+- **A declared surface that does not work reads as cover, and that is the
+  Fahrenkrug failure in a new coat.** The declaration test asserts a shop
+  *has* a surface, never that the surface *returns anything* -- it has to,
+  since it runs offline against config. The first live 18-shop sweep found
+  both ways the gap bites: mesbourgognes' configured `new_arrivals`
+  (`fr/nouveaux-produits`) answered **HTTP 404** under a row reading
+  `unreachable`, and vinnouveau's strip read `1 page, 0 products` under a
+  clean `ok`. Both shops counted as covered.
+  So two observations are reported, from the sweep that made them. **A 404 is
+  a path to correct, not an outage**: `NOT_THERE_STATUSES` already called it
+  "just as settled" as a refusal and only the reporting disagreed, so it now
+  gets its own coverage word (`missing 404`) and its own note, because waiting
+  does not fix a 404 and nobody but a human can. And **a sweep surface that
+  parses zero products is named** -- a new-arrivals strip lists the newest N
+  whether or not any are new, so zero is a path or an adapter problem and
+  never a quiet market. One empty read is weak evidence, so the note carries
+  the date that surface last carried anything (`_meta.surface_ok` in
+  `totals.json`); "has never carried anything" is the damning version.
+  **A `stated_total` shop is exempt, and leaving it in was a defect this
+  note's own first live run exposed.** For that kind "carried no products" is
+  the designed quiet answer -- it reads one number and stops unless the
+  number moved -- so run 44375623591 named feralart and oenovinia beside
+  vinnouveau and **2 of its 3 entries were noise**, which this file's own
+  rule says makes a note an ignored note. Its equivalent hole is a shop that
+  has stopped stating a total at all: the sweep then compares nothing and
+  checks nothing, and that is what `ParsedItems.states_no_total` carries into
+  the same note. It was a `print` and nothing else first, which is the exact
+  shape that named Alice Fahrenkrug for days while the inbox heard nothing.
+  A dry run is exempt from the sweep-stamp line for the same family of
+  reason: it writes no state by design, so it can never have a stamp of its
+  own, and the missing-stamp wording accused a trigger that may be working
+  perfectly -- in exactly the runs a human is watching.
+- **The run states what it spent.** `Requests spent: N of M`, in the log
+  beside the coverage table and in the digest. The budget is what bounds
+  coverage now, and reading it off the PAGES column misses the robots.txt
+  fetches, the documents and the redirect hops -- after the first live sweep
+  the number could not be answered at all without reconstructing it, which is
+  no way to know a sweep is about to start truncating.
 - Both workflows share one `actions/cache` entry, so they share one
   `concurrency` group. `hot.yml` deliberately uses `group: wine-scraper`,
   the full pass's group, rather than one of its own: seen.json decides what
